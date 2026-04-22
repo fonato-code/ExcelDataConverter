@@ -185,6 +185,68 @@
         return escapeHtml(value).replace(/\r?\n/g, "<br>");
     }
 
+    function escapeSqlString(value) {
+        return String(value).replace(/'/g, "''");
+    }
+
+    function escapePhpString(value) {
+        return String(value)
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, "\\\"");
+    }
+
+    function escapeXml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&apos;");
+    }
+
+    function sanitizeSqlIdentifier(value) {
+        const sanitized = String(value).replace(/[^A-Za-z0-9_]/g, "_");
+        return sanitized || "column";
+    }
+
+    function sanitizeXmlTagName(value, fallback) {
+        const sanitized = String(value).replace(/[^A-Za-z0-9_.-]/g, "_");
+        const valid = /^[A-Za-z_]/.test(sanitized) ? sanitized : fallback;
+        return valid || fallback;
+    }
+
+    function isNumericValue(value) {
+        return typeof value === "number" && Number.isFinite(value);
+    }
+
+    function prepareTableData(rows, firstRowIsHeader, headerTransform) {
+        if (!rows.length) {
+            return {
+                headers: [],
+                dataRows: []
+            };
+        }
+
+        if (!firstRowIsHeader) {
+            const maxColumnCount = rows.reduce(function (max, row) {
+                return Math.max(max, row.length);
+            }, 0);
+
+            return {
+                headers: buildDefaultHeaders(maxColumnCount),
+                dataRows: rows
+            };
+        }
+
+        const headerRow = rows[0];
+        return {
+            headers: headerRow.map(function (cell, index) {
+                return normalizeKey(String(cell), index, headerTransform);
+            }),
+            dataRows: rows.slice(1)
+        };
+    }
+
     function buildObjectsFromRows(rows, headers) {
         return rows.map(function (row) {
             return headers.reduce(function (record, header, index) {
@@ -228,6 +290,203 @@
             bodyMarkup,
             "</table>"
         ].filter(Boolean).join("\n");
+    }
+
+    function buildColumnArrays(rows, headers) {
+        return headers.reduce(function (result, header, columnIndex) {
+            result[header] = rows.map(function (row) {
+                return columnIndex < row.length ? row[columnIndex] : "";
+            });
+            return result;
+        }, {});
+    }
+
+    function buildDictionary(rows, headers) {
+        const valueHeaders = headers.slice(1);
+        return rows.reduce(function (result, row) {
+            if (!row.length) {
+                return result;
+            }
+
+            const key = String(row[0]);
+            result[key] = valueHeaders.reduce(function (entry, header, index) {
+                const rowIndex = index + 1;
+                entry[header] = rowIndex < row.length ? row[rowIndex] : "";
+                return entry;
+            }, {});
+            return result;
+        }, {});
+    }
+
+    function inferSqlType(rows, columnIndex) {
+        const values = rows
+            .map(function (row) {
+                return columnIndex < row.length ? row[columnIndex] : "";
+            })
+            .filter(function (value) {
+                return value !== "";
+            });
+
+        if (!values.length) {
+            return "VARCHAR(255)";
+        }
+
+        const allNumbers = values.every(function (value) {
+            return isNumericValue(value);
+        });
+
+        if (allNumbers && values.every(function (value) { return Number.isInteger(value); })) {
+            return "INT";
+        }
+
+        if (allNumbers) {
+            return "DECIMAL(18,6)";
+        }
+
+        return "VARCHAR(255)";
+    }
+
+    function formatSqlValue(value) {
+        if (value === "") {
+            return "NULL";
+        }
+
+        if (isNumericValue(value)) {
+            return String(value);
+        }
+
+        return "'" + escapeSqlString(value) + "'";
+    }
+
+    function buildSql(headers, rows) {
+        const tableName = "ExcelConverter";
+        const columnDefinitions = headers.map(function (header, index) {
+            return "\t" + sanitizeSqlIdentifier(header) + " " + inferSqlType(rows, index);
+        });
+        const insertColumns = headers.map(function (header) {
+            return sanitizeSqlIdentifier(header);
+        }).join(",");
+        const values = rows.map(function (row) {
+            return "\t(" + headers.map(function (_header, index) {
+                return formatSqlValue(index < row.length ? row[index] : "");
+            }).join(",") + ")";
+        }).join(",\n");
+
+        return [
+            "CREATE TABLE " + tableName + " (",
+            "\tid INT NOT NULL AUTO_INCREMENT PRIMARY KEY,",
+            columnDefinitions.join(",\n"),
+            ");",
+            "INSERT INTO " + tableName,
+            "\t(" + insertColumns + ")",
+            "VALUES",
+            values + ";"
+        ].join("\n");
+    }
+
+    function formatPhpValue(value) {
+        if (value === "") {
+            return "\"\"";
+        }
+
+        if (isNumericValue(value)) {
+            return String(value);
+        }
+
+        return "\"" + escapePhpString(value) + "\"";
+    }
+
+    function buildPhpArray(headers, rows) {
+        return [
+            "array(",
+            rows.map(function (row) {
+                return "\tarray(" + headers.map(function (header, index) {
+                    const cellValue = index < row.length ? row[index] : "";
+                    return "\"" + escapePhpString(header) + "\"=>" + formatPhpValue(cellValue);
+                }).join(",") + ")";
+            }).join(",\n"),
+            ");"
+        ].join("\n");
+    }
+
+    function buildXmlProperties(headers, rows) {
+        const lines = [
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            "<rows>"
+        ];
+
+        rows.forEach(function (row) {
+            const attributes = headers.map(function (header, index) {
+                const cellValue = index < row.length ? row[index] : "";
+                return header + "=\"" + escapeXml(cellValue) + "\"";
+            }).join(" ");
+            lines.push("\t<row " + attributes + "></row>");
+        });
+
+        lines.push("</rows>");
+        return lines.join("\n");
+    }
+
+    function buildXmlNodes(headers, rows) {
+        const xmlHeaders = headers.map(function (header, index) {
+            return sanitizeXmlTagName(header, "Col" + (index + 1));
+        });
+        const lines = [
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            "<rows>"
+        ];
+
+        rows.forEach(function (row) {
+            lines.push("\t<row>");
+            xmlHeaders.forEach(function (header, index) {
+                const cellValue = index < row.length ? row[index] : "";
+                lines.push("\t\t<" + header + ">" + escapeXml(cellValue) + "</" + header + ">");
+            });
+            lines.push("\t</row>");
+        });
+
+        lines.push("</rows>");
+        return lines.join("\n");
+    }
+
+    function buildOutput(format, headers, rows) {
+        if (format === "json") {
+            return JSON.stringify(buildObjectsFromRows(rows, headers), null, 2);
+        }
+
+        if (format === "json-column-arrays") {
+            return JSON.stringify(buildColumnArrays(rows, headers), null, 2);
+        }
+
+        if (format === "json-row-arrays") {
+            return JSON.stringify(rows, null, 2);
+        }
+
+        if (format === "json-dictionary") {
+            return JSON.stringify(buildDictionary(rows, headers), null, 2);
+        }
+
+        if (format === "html-table") {
+            return buildHtmlTable(rows, headers, true);
+        }
+
+        if (format === "sql") {
+            return buildSql(headers, rows);
+        }
+
+        if (format === "php") {
+            return buildPhpArray(headers, rows);
+        }
+
+        if (format === "xml-properties") {
+            return buildXmlProperties(headers, rows);
+        }
+
+        if (format === "xml-nodes") {
+            return buildXmlNodes(headers, rows);
+        }
+
+        return "";
     }
 
     createApp({
@@ -279,28 +538,17 @@
                         return "";
                     }
 
-                    if (!state.firstRowIsHeader) {
-                        const maxColumnCount = rows.reduce(function (max, row) {
-                            return Math.max(max, row.length);
-                        }, 0);
-                        const headers = buildDefaultHeaders(maxColumnCount);
-                        if (state.outputFormat === "html-table") {
-                            return buildHtmlTable(rows, headers, true);
-                        }
+                    const prepared = prepareTableData(
+                        rows,
+                        state.firstRowIsHeader,
+                        state.headerTransform
+                    );
 
-                        return JSON.stringify(buildObjectsFromRows(rows, headers), null, 2);
-                    }
-
-                    const [headerRow, ...dataRows] = rows;
-                    const headers = headerRow.map(function (cell, index) {
-                        return normalizeKey(String(cell), index, state.headerTransform);
-                    });
-
-                    if (state.outputFormat === "html-table") {
-                        return buildHtmlTable(dataRows, headers, true);
-                    }
-
-                    return JSON.stringify(buildObjectsFromRows(dataRows, headers), null, 2);
+                    return buildOutput(
+                        state.outputFormat,
+                        prepared.headers,
+                        prepared.dataRows
+                    );
                 } catch (error) {
                     return "Erro ao converter: " + error.message;
                 }
@@ -396,7 +644,14 @@
                                             <div class="col-12 col-sm-4 col-lg-5 col-xxl-4 px-0">
                                                 <select class="form-select" v-model="state.outputFormat">
                                                     <option value="json">JSON</option>
+                                                    <option value="json-column-arrays">JSON Column Arrays</option>
+                                                    <option value="json-row-arrays">JSON RowArrays</option>
+                                                    <option value="json-dictionary">JSON Dictionary</option>
                                                     <option value="html-table">HTML - Tables</option>
+                                                    <option value="sql">SQL</option>
+                                                    <option value="php">PHP</option>
+                                                    <option value="xml-properties">XML - Properties</option>
+                                                    <option value="xml-nodes">XML - Nodes</option>
                                                 </select>
                                             </div>
                                         </div>
