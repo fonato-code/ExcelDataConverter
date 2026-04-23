@@ -1,5 +1,5 @@
 (function () {
-    const { createApp, computed, reactive, watch } = Vue;
+    const { createApp, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
     const inputConfig = window.ExcelConverterInputConfig || [];
     const inputFormats = window.ExcelConverterInputFormats || [];
     const inputParsers = window.ExcelConverterInputParsers || {};
@@ -1277,6 +1277,33 @@
                 window.addEventListener("mouseup", onUp);
             }
 
+            async function handleInputPaste() {
+                window.setTimeout(async function () {
+                    await nextTick();
+
+                    if (inputFormatError.value) {
+                        return;
+                    }
+
+                    if (!state.standardHeaders.length && !state.standardRows.length) {
+                        return;
+                    }
+
+                    state.inputSectionCollapsed = true;
+                    state.previewSectionCollapsed = false;
+                    state.outputSectionCollapsed = true;
+
+                    await nextTick();
+                    const previewSection = document.getElementById("preview-section");
+                    if (previewSection) {
+                        previewSection.scrollIntoView({
+                            behavior: "smooth",
+                            block: "start"
+                        });
+                    }
+                }, 0);
+            }
+
             function toggleTheme() {
                 state.theme = state.theme === "light" ? "dark" : "light";
             }
@@ -1288,6 +1315,23 @@
             function goToPreviewPage(page) {
                 state.previewPage = Math.max(1, Math.min(previewPageCount.value, page));
             }
+
+            onMounted(function () {
+                function onKeyDown(event) {
+                    if (event.key === "Escape" && state.sidebarOpen) {
+                        state.sidebarOpen = false;
+                    }
+                }
+
+                window.addEventListener("keydown", onKeyDown);
+                state._onWindowKeyDown = onKeyDown;
+            });
+
+            onBeforeUnmount(function () {
+                if (state._onWindowKeyDown) {
+                    window.removeEventListener("keydown", state._onWindowKeyDown);
+                }
+            });
 
             return {
                 state,
@@ -1327,6 +1371,7 @@
                 cyclePreviewSort,
                 getPreviewSortIcon,
                 startSidebarResize,
+                handleInputPaste,
                 toggleTheme,
                 updateStandardHeader,
                 updateStandardCell,
@@ -1557,7 +1602,7 @@
 
                     <main class="workspace-main">
                         <div class="row g-4">
-                            <section class="col-12">
+                            <section id="input-section" class="col-12">
                                 <div class="panel-card input-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
@@ -1574,12 +1619,12 @@
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
                                                     <i class="fas fa-cog" aria-hidden="true"></i>
                                                 </button>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('input')">
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('input')">
                                                     <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
                                             </div>
                                         </div>
-                                        <div v-show="!state.inputSectionCollapsed">
+                                        <div v-if="!state.inputSectionCollapsed">
                                         <div
                                             class="status-chip mb-3"
                                             :class="inputFormatError ? 'error' : statusMessage.tone"
@@ -1589,6 +1634,7 @@
                                         <textarea
                                             class="form-control editor-textarea"
                                             v-model="state.input"
+                                            @paste="handleInputPaste"
                                             placeholder="Cole aqui dados copiados do Excel, CSV ou TSV"
                                             spellcheck="false"
                                         ></textarea>
@@ -1597,7 +1643,7 @@
                                 </div>
                             </section>
 
-                            <section class="col-12">
+                            <section id="preview-section" class="col-12">
                                 <div class="panel-card preview-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">
@@ -1610,13 +1656,13 @@
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
                                                     <i class="fas fa-cog" aria-hidden="true"></i>
                                                 </button>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('preview')">
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('preview')">
                                                     <i :class="state.previewSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
                                             </div>
                                         </div>
 
-                                        <div v-show="!state.previewSectionCollapsed">
+                                        <div v-if="!state.previewSectionCollapsed">
 
                                         
                                         <div v-if="duplicateHeaderMessage" class="status-chip warning mb-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
@@ -1627,16 +1673,7 @@
                                         </div>
 
                                         <div v-if="standardObject.headers.length" class="preview-toolbar mb-3">
-                                            <div class="input-group input-group-sm preview-search-group">
-                                                <span class="input-group-text"><i class="fas fa-search" aria-hidden="true"></i></span>
-                                                <input class="form-control" v-model="state.previewSearch" placeholder="Buscar nas linhas">
-                                                <button class="btn btn-outline-primary" type="button" @click="addStandardColumn" title="Adicionar coluna">
-                                                    <i class="fas fa-columns" aria-hidden="true"></i>
-                                                </button>
-                                                <button class="btn btn-outline-primary" type="button" @click="addStandardRow" title="Adicionar linha">
-                                                    <i class="fas fa-plus" aria-hidden="true"></i>
-                                                </button>
-                                            </div>
+                                            
                                             <div class="preview-page-size">
                                                 <select class="form-select form-select-sm" v-model.number="state.previewPageSize">
                                                     <option :value="10">10</option>
@@ -1645,6 +1682,16 @@
                                                     <option :value="100">100</option>
                                                 </select>
                                                 <span>linhas por pagina</span>
+                                            </div>
+                                            <div class="input-group input-group-sm preview-search-group" style="width:400px">
+                                                <span class="input-group-text"><i class="fas fa-search" aria-hidden="true"></i></span>
+                                                <input class="form-control" v-model="state.previewSearch" placeholder="Buscar nas linhas">
+                                                <button class="btn btn-outline-primary" type="button" @click="addStandardColumn" title="Adicionar coluna">
+                                                    <i class="fas fa-columns" aria-hidden="true"></i>
+                                                </button>
+                                                <button class="btn btn-outline-primary" type="button" @click="addStandardRow" title="Adicionar linha">
+                                                    <i class="fas fa-plus" aria-hidden="true"></i>
+                                                </button>
                                             </div>
                                         </div>
 
@@ -1761,7 +1808,7 @@
                                 </div>
                             </section>
 
-                            <section class="col-12">
+                            <section id="output-section" class="col-12">
                                 <div class="panel-card output-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">
@@ -1803,13 +1850,13 @@
                                                     <i class="fas fa-cog" aria-hidden="true"></i>
                                                 </button>
 
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('output')">
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('output')">
                                                     <i :class="state.outputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
 
                                             </div>
                                         </div>
-                                        <div v-show="!state.outputSectionCollapsed">
+                                        <div v-if="!state.outputSectionCollapsed">
                                         <textarea
                                             class="form-control editor-textarea"
                                             :value="visibleOutput"

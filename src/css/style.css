@@ -555,7 +555,7 @@ html {
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
 }
 
 .preview-page-size {
@@ -632,6 +632,7 @@ html {
 
 .form-control,
 .form-select,
+.input-group-text,
 .bg-body,
 .bg-white {
     background-color: var(--ec-button-bg) !important;
@@ -717,5 +718,9 @@ html {
 
     .preview-search-group {
         min-width: 100%;
+    }
+
+    .preview-toolbar {
+        flex-wrap: wrap;
     }
 }
