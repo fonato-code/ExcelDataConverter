@@ -94,6 +94,7 @@
         return builder({
             headers: headers,
             rows: rows,
+            columns: options.columns || [],
             options: options,
             utils: {
                 buildObjectsFromRows: buildObjectsFromRows,
@@ -204,7 +205,10 @@
                         key: column.key,
                         header: column.header,
                         sourceIndex: column.sourceIndex,
-                        enabled: previous ? previous.enabled : true
+                        enabled: previous ? previous.enabled : true,
+                        outputName: previous ? previous.outputName : column.header,
+                        sqlType: previous ? previous.sqlType : "",
+                        avroType: previous ? previous.avroType : ""
                     };
                 });
             }, { immediate: true });
@@ -217,7 +221,20 @@
 
             const orderedHeaders = computed(function () {
                 return selectedColumns.value.map(function (column) {
-                    return column.header;
+                    return column.outputName || column.header;
+                });
+            });
+
+            const orderedColumns = computed(function () {
+                return selectedColumns.value.map(function (column) {
+                    return {
+                        key: column.key,
+                        header: column.header,
+                        outputName: column.outputName || column.header,
+                        sourceIndex: column.sourceIndex,
+                        sqlType: column.sqlType,
+                        avroType: column.avroType
+                    };
                 });
             });
 
@@ -243,6 +260,59 @@
                 return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.sql);
             });
 
+            const showDefaultInputConfig = computed(function () {
+                return state.inputFormat === "input-default";
+            });
+
+            const showColumnTypeControl = computed(function () {
+                const selectedFormat = outputFormats.find(function (format) {
+                    return format.value === state.outputFormat;
+                });
+                return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.types);
+            });
+
+            const currentTypeFieldKey = computed(function () {
+                if (state.outputFormat === "sql") {
+                    return "sqlType";
+                }
+
+                if (state.outputFormat === "avro") {
+                    return "avroType";
+                }
+
+                return "";
+            });
+
+            const currentTypeOptions = computed(function () {
+                if (state.outputFormat === "sql") {
+                    return [
+                        { value: "", label: "Auto" },
+                        { value: "INT", label: "INT" },
+                        { value: "DECIMAL(18,6)", label: "DECIMAL(18,6)" },
+                        { value: "VARCHAR(255)", label: "VARCHAR(255)" },
+                        { value: "TEXT", label: "TEXT" },
+                        { value: "DATE", label: "DATE" },
+                        { value: "DATETIME", label: "DATETIME" },
+                        { value: "BOOLEAN", label: "BOOLEAN" }
+                    ];
+                }
+
+                if (state.outputFormat === "avro") {
+                    return [
+                        { value: "", label: "Auto" },
+                        { value: "string", label: "string" },
+                        { value: "int", label: "int" },
+                        { value: "long", label: "long" },
+                        { value: "float", label: "float" },
+                        { value: "double", label: "double" },
+                        { value: "boolean", label: "boolean" },
+                        { value: "bytes", label: "bytes" }
+                    ];
+                }
+
+                return [];
+            });
+
             const output = computed(function () {
                 if (!state.input.trim()) {
                     return "";
@@ -258,6 +328,7 @@
                         orderedHeaders.value,
                         orderedRows.value,
                         {
+                            columns: orderedColumns.value,
                             sqlTableName: state.sqlTableName,
                             xmlRootTagName: state.xmlRootTagName,
                             xmlRowTagName: state.xmlRowTagName
@@ -322,6 +393,10 @@
                 output,
                 isXmlOutput,
                 isSqlOutput,
+                showDefaultInputConfig,
+                showColumnTypeControl,
+                currentTypeFieldKey,
+                currentTypeOptions,
                 inputFormats,
                 inputConfig,
                 outputFormats,
@@ -355,7 +430,7 @@
                                         </div>
                                     </button>
 
-                                    <div v-show="!state.inputSectionCollapsed" class="mt-3">
+                                    <div v-show="!state.inputSectionCollapsed && showDefaultInputConfig" class="mt-3">
                                         <div
                                             v-for="field in inputConfig"
                                             :key="field.id"
@@ -402,15 +477,29 @@
                                                     @dragend="endColumnDrag"
                                                 >
                                                     <span class="column-grip text-secondary" title="Arrastar">::</span>
-                                                    <input
-                                                        :id="'column-' + column.key"
-                                                        class="form-check-input mt-0"
-                                                        type="checkbox"
-                                                        v-model="column.enabled"
-                                                    >
-                                                    <label :for="'column-' + column.key" class="form-check-label flex-grow-1 small fw-semibold">
-                                                        {{ column.header }}
-                                                    </label>
+                                                    <input :id="'column-' + column.key" class="form-check-input mt-0" type="checkbox" v-model="column.enabled">
+                                                    <div class="flex-grow-1">
+                                                        <label :for="'column-' + column.key" class="form-check-label small fw-semibold d-block mb-2">
+                                                            {{ column.header }}
+                                                        </label>
+                                                        <div class="row g-2">
+                                                            <div class="col-12" :class="showColumnTypeControl ? 'col-md-6' : 'col-md-12'">
+                                                                <input
+                                                                    class="form-control form-control-sm"
+                                                                    type="text"
+                                                                    v-model="column.outputName"
+                                                                    placeholder="Nome da coluna no output"
+                                                                >
+                                                            </div>
+                                                            <div v-if="showColumnTypeControl" class="col-12 col-md-6">
+                                                                <select class="form-select form-select-sm" v-model="column[currentTypeFieldKey]">
+                                                                    <option v-for="option in currentTypeOptions" :key="option.value" :value="option.value">
+                                                                        {{ option.label }}
+                                                                    </option>
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div v-else class="small text-secondary">Cole um texto no input para detectar as colunas.</div>

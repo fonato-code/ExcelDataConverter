@@ -37,15 +37,18 @@
         return ["null", "string"];
     }
 
-    function buildAvro(headers, rows, utils) {
+    function buildAvro(headers, rows, utils, columns) {
         const schema = {
             type: "record",
             name: "ExcelConverterRecord",
             namespace: "excelconverter.generated",
             fields: headers.map(function (header, index) {
+                const selectedColumn = columns[index];
                 return {
                     name: utils.sanitizeXmlTagName(header, "Col" + (index + 1)),
-                    type: inferAvroType(rows, index, utils),
+                    type: selectedColumn && selectedColumn.avroType
+                        ? ["null", selectedColumn.avroType]
+                        : inferAvroType(rows, index, utils),
                     default: null
                 };
             })
@@ -64,10 +67,10 @@
     window.ExcelConverterOutputFormats.push({
         value: "avro",
         label: "Apache - Avro",
-        controls: { columns: true, xml: false, sql: false }
+        controls: { columns: true, xml: false, sql: false, types: true }
     });
 
     window.ExcelConverterOutputBuilders.avro = function (context) {
-        return buildAvro(context.headers, context.rows, context.utils);
+        return buildAvro(context.headers, context.rows, context.utils, context.columns);
     };
 })();

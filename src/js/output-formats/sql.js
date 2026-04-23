@@ -42,10 +42,14 @@
         return "'" + utils.escapeSqlString(value) + "'";
     }
 
-    function buildSql(headers, rows, tableName, utils) {
+    function buildSql(headers, rows, tableName, utils, columns) {
         const resolvedTableName = utils.sanitizeSqlIdentifier(tableName || "ExcelConverter");
         const columnDefinitions = headers.map(function (header, index) {
-            return "\t" + utils.sanitizeSqlIdentifier(header) + " " + inferSqlType(rows, index, utils);
+            const selectedColumn = columns[index];
+            const declaredType = selectedColumn && selectedColumn.sqlType
+                ? selectedColumn.sqlType
+                : inferSqlType(rows, index, utils);
+            return "\t" + utils.sanitizeSqlIdentifier(header) + " " + declaredType;
         });
         const insertColumns = headers.map(function (header) {
             return utils.sanitizeSqlIdentifier(header);
@@ -71,10 +75,10 @@
     window.ExcelConverterOutputFormats.push({
         value: "sql",
         label: "SQL",
-        controls: { columns: true, xml: false, sql: true }
+        controls: { columns: true, xml: false, sql: true, types: true }
     });
 
     window.ExcelConverterOutputBuilders.sql = function (context) {
-        return buildSql(context.headers, context.rows, context.options.sqlTableName, context.utils);
+        return buildSql(context.headers, context.rows, context.options.sqlTableName, context.utils, context.columns);
     };
 })();
