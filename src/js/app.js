@@ -112,7 +112,7 @@
     createApp({
         setup() {
             const state = reactive({
-                theme: "light",
+                theme: "dark",
                 input: "",
                 inputFormat: "input-default",
                 delimiter: "auto",
@@ -157,6 +157,35 @@
                 };
             });
 
+            const inputFormatError = computed(function () {
+                if (!state.input.trim()) {
+                    return "";
+                }
+
+                const parser = inputParsers[state.inputFormat];
+                if (!parser) {
+                    return "Formato de input nao suportado.";
+                }
+
+                try {
+                    parser({
+                        input: state.input,
+                        state: state,
+                        utils: {
+                            buildDefaultHeaders: buildDefaultHeaders,
+                            normalizeHeader: normalizeHeader
+                        }
+                    });
+                    return "";
+                } catch (error) {
+                    const currentInputFormat = inputFormats.find(function (format) {
+                        return format.value === state.inputFormat;
+                    });
+                    const formatLabel = currentInputFormat ? currentInputFormat.label : state.inputFormat;
+                    return "O texto informado nao corresponde ao formato de input selecionado: " + formatLabel + ".";
+                }
+            });
+
             const standardObject = computed(function () {
                 if (!state.input.trim()) {
                     return {
@@ -173,14 +202,21 @@
                     };
                 }
 
-                return parser({
-                    input: state.input,
-                    state: state,
-                    utils: {
-                        buildDefaultHeaders: buildDefaultHeaders,
-                        normalizeHeader: normalizeHeader
-                    }
-                });
+                try {
+                    return parser({
+                        input: state.input,
+                        state: state,
+                        utils: {
+                            buildDefaultHeaders: buildDefaultHeaders,
+                            normalizeHeader: normalizeHeader
+                        }
+                    });
+                } catch (_error) {
+                    return {
+                        headers: [],
+                        dataRows: []
+                    };
+                }
             });
 
             const availableColumns = computed(function () {
@@ -318,6 +354,10 @@
                     return "";
                 }
 
+                if (inputFormatError.value) {
+                    return "Erro: " + inputFormatError.value;
+                }
+
                 try {
                     if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
                         return "";
@@ -390,6 +430,7 @@
             return {
                 state,
                 statusMessage,
+                inputFormatError,
                 output,
                 isXmlOutput,
                 isSqlOutput,
@@ -420,6 +461,10 @@
                                     <button class="theme-toggle" type="button" @click="toggleTheme">
                                         {{ state.theme === 'light' ? 'Escuro' : 'Claro' }}
                                     </button>
+                                </div>
+
+                                <div v-if="inputFormatError" class="alert alert-danger py-2 px-3 small" role="alert">
+                                    {{ inputFormatError }}
                                 </div>
 
                                 <div class="border rounded-4 p-3 mb-4 bg-white bg-opacity-50">
