@@ -4,7 +4,7 @@
 
     window.ExcelConverterOutputFormats.push({
         value: "json-row-arrays",
-        label: "JSON RowArrays",
+        label: "JSON - RowArrays",
         controls: { columns: true, xml: false, sql: false }
     });
 

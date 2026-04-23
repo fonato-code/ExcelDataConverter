@@ -63,7 +63,7 @@
 
     window.ExcelConverterOutputFormats.push({
         value: "avro",
-        label: "Avro",
+        label: "Apache - Avro",
         controls: { columns: true, xml: false, sql: false }
     });
 

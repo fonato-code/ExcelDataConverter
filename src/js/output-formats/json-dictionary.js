@@ -21,7 +21,7 @@
 
     window.ExcelConverterOutputFormats.push({
         value: "json-dictionary",
-        label: "JSON Dictionary",
+        label: "JSON - Dictionary",
         controls: { columns: true, xml: false, sql: false }
     });
 

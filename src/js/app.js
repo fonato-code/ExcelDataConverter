@@ -285,6 +285,7 @@
     createApp({
         setup() {
             const state = reactive({
+                theme: "light",
                 input: "",
                 delimiter: "auto",
                 decimalSign: "dot",
@@ -299,6 +300,12 @@
                 inputSectionCollapsed: false,
                 outputSectionCollapsed: false
             });
+
+            watch(function () {
+                return state.theme;
+            }, function (theme) {
+                document.documentElement.setAttribute("data-theme", theme);
+            }, { immediate: true });
 
             const resolvedDelimiter = computed(function () {
                 if (state.delimiter === "tab") {
@@ -473,6 +480,10 @@
                 }
             }
 
+            function toggleTheme() {
+                state.theme = state.theme === "light" ? "dark" : "light";
+            }
+
             return {
                 state,
                 statusMessage,
@@ -484,7 +495,8 @@
                 startColumnDrag,
                 dropColumn,
                 endColumnDrag,
-                toggleSection
+                toggleSection,
+                toggleTheme
             };
         },
         template: `
@@ -495,7 +507,12 @@
                         <div class="sidebar-card h-100">
                             <div class="sidebar-accent"></div>
                             <div class="card-body p-4 sidebar-scroll">
-                                <div class="sidebar-title mb-2">Configuracoes</div>
+                                <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
+                                    <div class="sidebar-title mb-0">Configuracoes</div>
+                                    <button class="theme-toggle" type="button" @click="toggleTheme">
+                                        {{ state.theme === 'light' ? 'Escuro' : 'Claro' }}
+                                    </button>
+                                </div>
 
                                 <div class="border rounded-4 p-3 mb-4 bg-white bg-opacity-50">
                                     <button class="config-section-toggle" type="button" @click="toggleSection('input')">
@@ -583,17 +600,13 @@
                                     </div>
                                 </div>
 
-                                <div class="hint-box rounded-4 p-3">
-                                    <div class="fw-bold mb-2">Dica</div>
-                                    <div class="text-secondary small">No modo Auto, o sistema compara virgulas e tabs nas primeiras linhas. Para valores como 10,50 use DecimalSign em Comma.</div>
-                                </div>
                             </div>
                         </div>
                     </aside>
 
                     <main class="col-12 col-xl-9">
                         <div class="row g-4">
-                            <section class="col-12 col-lg-6">
+                            <section class="col-12">
                                 <div class="panel-card input-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
@@ -613,7 +626,7 @@
                                 </div>
                             </section>
 
-                            <section class="col-12 col-lg-6">
+                            <section class="col-12">
                                 <div class="panel-card output-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">

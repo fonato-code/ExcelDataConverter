@@ -13,7 +13,7 @@
 
     window.ExcelConverterOutputFormats.push({
         value: "json-column-arrays",
-        label: "JSON Column Arrays",
+        label: "JSON - Column Arrays",
         controls: { columns: true, xml: false, sql: false }
     });
 
