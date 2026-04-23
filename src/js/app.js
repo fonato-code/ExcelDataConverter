@@ -1,93 +1,12 @@
 (function () {
     const { createApp, computed, reactive, watch } = Vue;
     const inputConfig = window.ExcelConverterInputConfig || [];
+    const inputFormats = window.ExcelConverterInputFormats || [];
+    const inputParsers = window.ExcelConverterInputParsers || {};
     const outputFormats = window.ExcelConverterOutputFormats || [];
     const outputBuilders = window.ExcelConverterOutputBuilders || {};
 
-    function detectDelimiter(text) {
-        const scores = {
-            ",": scoreDelimiter(text, ","),
-            "\t": scoreDelimiter(text, "\t")
-        };
-
-        return scores["\t"] > scores[","] ? "\t" : ",";
-    }
-
-    function scoreDelimiter(text, delimiter) {
-        const rows = parseDelimitedText(text, delimiter).slice(0, 5);
-        return rows.reduce(function (total, row) {
-            return total + (row.length > 1 ? row.length : 0);
-        }, 0);
-    }
-
-    function parseDelimitedText(text, delimiter) {
-        const rows = [];
-        let row = [];
-        let field = "";
-        let inQuotes = false;
-
-        function pushField() {
-            row.push(field);
-            field = "";
-        }
-
-        function pushRow() {
-            if (row.length === 1 && row[0] === "" && field === "") {
-                row = [];
-                return;
-            }
-
-            rows.push(row);
-            row = [];
-        }
-
-        for (let index = 0; index < text.length; index += 1) {
-            const char = text[index];
-            const nextChar = text[index + 1];
-
-            if (char === "\"") {
-                if (inQuotes && nextChar === "\"") {
-                    field += "\"";
-                    index += 1;
-                    continue;
-                }
-
-                inQuotes = !inQuotes;
-                continue;
-            }
-
-            if (!inQuotes && char === delimiter) {
-                pushField();
-                continue;
-            }
-
-            if (!inQuotes && (char === "\n" || char === "\r")) {
-                pushField();
-                pushRow();
-
-                if (char === "\r" && nextChar === "\n") {
-                    index += 1;
-                }
-
-                continue;
-            }
-
-            field += char;
-        }
-
-        if (field !== "" || row.length) {
-            pushField();
-            pushRow();
-        }
-
-        return rows.filter(function (currentRow) {
-            return currentRow.some(function (cell) {
-                return cell !== "";
-            });
-        });
-    }
-
-    function normalizeKey(value, index, transform) {
+    function normalizeHeader(value, index, transform) {
         const fallback = "column_" + (index + 1);
         if (!value) {
             return fallback;
@@ -102,71 +21,6 @@
         }
 
         return value;
-    }
-
-    function parseCell(rawValue, decimalSign) {
-        const value = rawValue.trim();
-        if (value === "") {
-            return "";
-        }
-
-        const normalized = normalizeNumericString(value, decimalSign);
-
-        if (normalized && /^-?\d+(\.\d+)?$/.test(normalized)) {
-            return Number(normalized);
-        }
-
-        if (/^(true|false)$/i.test(value)) {
-            return value.toLowerCase() === "true";
-        }
-
-        return value;
-    }
-
-    function normalizeNumericString(value, decimalSign) {
-        const compactValue = value.replace(/\s/g, "");
-        const dotPattern = /^-?\d+(\.\d+)?$/;
-        const commaPattern = /^-?\d+(,\d+)?$/;
-        const usThousandsPattern = /^-?\d{1,3}(,\d{3})+(\.\d+)?$/;
-        const brThousandsPattern = /^-?\d{1,3}(\.\d{3})+(,\d+)?$/;
-
-        if (decimalSign === "comma") {
-            if (brThousandsPattern.test(compactValue)) {
-                return compactValue.replace(/\./g, "").replace(",", ".");
-            }
-
-            if (commaPattern.test(compactValue)) {
-                return compactValue.replace(",", ".");
-            }
-
-            if (dotPattern.test(compactValue)) {
-                return compactValue;
-            }
-
-            return null;
-        }
-
-        if (decimalSign === "dot") {
-            if (usThousandsPattern.test(compactValue) && compactValue.indexOf(".") !== -1) {
-                return compactValue.replace(/,/g, "");
-            }
-
-            if (dotPattern.test(compactValue)) {
-                return compactValue;
-            }
-
-            return null;
-        }
-
-        return null;
-    }
-
-    function buildRows(text, delimiter, decimalSign) {
-        return parseDelimitedText(text, delimiter).map(function (row) {
-            return row.map(function (cell) {
-                return parseCell(cell, decimalSign);
-            });
-        });
     }
 
     function buildDefaultHeaders(columnCount) {
@@ -222,34 +76,6 @@
         return typeof value === "number" && Number.isFinite(value);
     }
 
-    function prepareTableData(rows, firstRowIsHeader, headerTransform) {
-        if (!rows.length) {
-            return {
-                headers: [],
-                dataRows: []
-            };
-        }
-
-        if (!firstRowIsHeader) {
-            const maxColumnCount = rows.reduce(function (max, row) {
-                return Math.max(max, row.length);
-            }, 0);
-
-            return {
-                headers: buildDefaultHeaders(maxColumnCount),
-                dataRows: rows
-            };
-        }
-
-        const headerRow = rows[0];
-        return {
-            headers: headerRow.map(function (cell, index) {
-                return normalizeKey(String(cell), index, headerTransform);
-            }),
-            dataRows: rows.slice(1)
-        };
-    }
-
     function buildObjectsFromRows(rows, headers) {
         return rows.map(function (row) {
             return headers.reduce(function (record, header, index) {
@@ -287,6 +113,7 @@
             const state = reactive({
                 theme: "light",
                 input: "",
+                inputFormat: "input-default",
                 delimiter: "auto",
                 decimalSign: "dot",
                 firstRowIsHeader: true,
@@ -307,18 +134,6 @@
                 document.documentElement.setAttribute("data-theme", theme);
             }, { immediate: true });
 
-            const resolvedDelimiter = computed(function () {
-                if (state.delimiter === "tab") {
-                    return "\t";
-                }
-
-                if (state.delimiter === "comma") {
-                    return ",";
-                }
-
-                return detectDelimiter(state.input);
-            });
-
             const statusMessage = computed(function () {
                 if (!state.input.trim()) {
                     return {
@@ -327,31 +142,48 @@
                     };
                 }
 
-                const delimiterLabel = resolvedDelimiter.value === "\t" ? "Tab" : "Comma";
+                const currentInputFormat = inputFormats.find(function (format) {
+                    return format.value === state.inputFormat;
+                });
+                const delimiterLabel = state.delimiter === "tab"
+                    ? "Tab"
+                    : state.delimiter === "comma"
+                        ? "Comma"
+                        : "Auto";
                 return {
                     tone: "info",
-                    text: "Delimitador em uso: " + delimiterLabel + ". Formato de saida atual: JSON."
+                    text: "Input: " + (currentInputFormat ? currentInputFormat.label : state.inputFormat) + ". Delimitador em uso: " + delimiterLabel + "."
                 };
             });
 
-            const parsedRows = computed(function () {
+            const standardObject = computed(function () {
                 if (!state.input.trim()) {
-                    return [];
+                    return {
+                        headers: [],
+                        dataRows: []
+                    };
                 }
 
-                return buildRows(state.input, resolvedDelimiter.value, state.decimalSign);
-            });
+                const parser = inputParsers[state.inputFormat];
+                if (!parser) {
+                    return {
+                        headers: [],
+                        dataRows: []
+                    };
+                }
 
-            const preparedData = computed(function () {
-                return prepareTableData(
-                    parsedRows.value,
-                    state.firstRowIsHeader,
-                    state.headerTransform
-                );
+                return parser({
+                    input: state.input,
+                    state: state,
+                    utils: {
+                        buildDefaultHeaders: buildDefaultHeaders,
+                        normalizeHeader: normalizeHeader
+                    }
+                });
             });
 
             const availableColumns = computed(function () {
-                return preparedData.value.headers.map(function (header, index) {
+                return standardObject.value.headers.map(function (header, index) {
                     return {
                         key: header + "__" + index,
                         header: header,
@@ -390,7 +222,7 @@
             });
 
             const orderedRows = computed(function () {
-                return preparedData.value.dataRows.map(function (row) {
+                return standardObject.value.dataRows.map(function (row) {
                     return selectedColumns.value.map(function (column) {
                         return column.sourceIndex < row.length ? row[column.sourceIndex] : "";
                     });
@@ -417,7 +249,7 @@
                 }
 
                 try {
-                    if (!parsedRows.value.length) {
+                    if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
                         return "";
                     }
 
@@ -490,6 +322,7 @@
                 output,
                 isXmlOutput,
                 isSqlOutput,
+                inputFormats,
                 inputConfig,
                 outputFormats,
                 startColumnDrag,
@@ -614,7 +447,13 @@
                                                 <div class="editor-label mb-1">Input</div>
                                                 <h3 class="h5 mb-0">Texto de origem</h3>
                                             </div>
-                                            <span class="badge rounded-pill text-bg-primary px-3 py-2">Excel / CSV / TSV</span>
+                                            <div class="col-12 col-sm-5 col-lg-6 col-xxl-5 px-0">
+                                                <select class="form-select form-select-sm" v-model="state.inputFormat">
+                                                    <option v-for="format in inputFormats" :key="format.value" :value="format.value">
+                                                        {{ format.label }}
+                                                    </option>
+                                                </select>
+                                            </div>
                                         </div>
                                         <textarea
                                             class="form-control editor-textarea"
