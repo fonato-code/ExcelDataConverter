@@ -1894,12 +1894,25 @@
                 }
 
                 function onWindowClick(event) {
-                    if (!event.target.closest(".preview-column-menu-wrap")) {
-                        state.previewColumnMenuKey = "";
+                    const target = event.target;
+                    if (target && typeof target.closest === "function") {
+                        if (target.closest(".preview-column-menu-wrap") || target.closest(".preview-column-menu")) {
+                            return;
+                        }
                     }
+                    state.previewColumnMenuKey = "";
                 }
 
-                function onViewportChange() {
+                function onViewportChange(event) {
+                    if (!state.previewColumnMenuKey) {
+                        return;
+                    }
+                    if (event && event.type === "scroll") {
+                        const target = event.target;
+                        if (target && target.nodeType === 1 && typeof target.closest === "function" && target.closest(".preview-column-menu")) {
+                            return;
+                        }
+                    }
                     state.previewColumnMenuKey = "";
                 }
 
