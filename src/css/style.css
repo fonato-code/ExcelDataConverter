@@ -53,6 +53,39 @@ body {
     transition: background 0.25s ease, color 0.25s ease;
 }
 
+textarea {
+    height: 250px;
+}
+
+html {
+    scrollbar-color: rgba(116, 138, 196, 0.45) rgba(17, 24, 39, 0.72);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(116, 138, 196, 0.45) rgba(17, 24, 39, 0.72);
+}
+
+*::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+    background: rgba(17, 24, 39, 0.72);
+    border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(96, 165, 250, 0.55), rgba(17, 184, 166, 0.45));
+    border: 2px solid rgba(17, 24, 39, 0.72);
+    border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(96, 165, 250, 0.75), rgba(17, 184, 166, 0.65));
+}
+
 .app-wrap {
     position: relative;
     min-height: 100vh;
@@ -191,6 +224,10 @@ body {
 .sidebar-card,
 .panel-card {
     border-radius: 1.25rem;
+}
+
+.panel-card {
+    overflow: hidden;
 }
 
 .sidebar-card {
@@ -543,6 +580,14 @@ body {
 
 .section-toggle-btn {
     min-width: 2.25rem;
+}
+
+.input-panel .card-body>.d-flex:first-child,
+.preview-panel .card-body>.d-flex:first-child,
+.output-panel .card-body>.d-flex:first-child {
+    padding-bottom: 1rem;
+    margin-bottom: 1rem !important;
+    border-bottom: 1px solid var(--ec-border);
 }
 
 .preview-empty {

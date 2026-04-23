@@ -1211,6 +1211,16 @@
                 }
             }
 
+            function toggleMainAccordion(sectionName) {
+                const nextInput = sectionName === "input" ? !state.inputSectionCollapsed : true;
+                const nextPreview = sectionName === "preview" ? !state.previewSectionCollapsed : true;
+                const nextOutput = sectionName === "output" ? !state.outputSectionCollapsed : true;
+
+                state.inputSectionCollapsed = nextInput;
+                state.previewSectionCollapsed = nextPreview;
+                state.outputSectionCollapsed = nextOutput;
+            }
+
             function toggleSidebar() {
                 state.sidebarOpen = !state.sidebarOpen;
             }
@@ -1312,6 +1322,7 @@
                 dropPreviewColumn,
                 endPreviewColumnDrag,
                 toggleSection,
+                toggleMainAccordion,
                 toggleSidebar,
                 cyclePreviewSort,
                 getPreviewSortIcon,
@@ -1560,6 +1571,9 @@
                                                         {{ format.label }}
                                                     </option>
                                                 </select>
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
+                                                    <i class="fas fa-cog" aria-hidden="true"></i>
+                                                </button>
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('input')">
                                                     <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
@@ -1593,6 +1607,9 @@
                                             </div>
                                             <div class="d-flex align-items-center gap-2">
                                                 <div class="small text-secondary">{{ previewMeta }}</div>
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
+                                                    <i class="fas fa-cog" aria-hidden="true"></i>
+                                                </button>
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('preview')">
                                                     <i :class="state.previewSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
@@ -1600,6 +1617,8 @@
                                         </div>
 
                                         <div v-show="!state.previewSectionCollapsed">
+
+                                        
                                         <div v-if="duplicateHeaderMessage" class="status-chip warning mb-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
                                             <span>{{ duplicateHeaderMessage }}</span>
                                             <button class="btn btn-sm btn-outline-warning" type="button" @click="dedupeStandardHeaders">
@@ -1780,6 +1799,10 @@
                                                     </button>
                                                 </div>
                                                 
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
+                                                    <i class="fas fa-cog" aria-hidden="true"></i>
+                                                </button>
+
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSection('output')">
                                                     <i :class="state.outputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
