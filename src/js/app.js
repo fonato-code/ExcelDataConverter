@@ -115,8 +115,14 @@
             const saved = JSON.parse(window.localStorage.getItem(PREFERENCES_STORAGE_KEY) || "{}");
             return Object.assign({}, defaultState, saved, {
                 input: defaultState.input,
+                standardHeaders: defaultState.standardHeaders,
+                standardRows: defaultState.standardRows,
+                standardColumnKeys: defaultState.standardColumnKeys,
                 columnConfigs: defaultState.columnConfigs,
                 draggedColumnKey: defaultState.draggedColumnKey,
+                bulkHeaderRenameMode: defaultState.bulkHeaderRenameMode,
+                bulkHeaderRenamePrefix: defaultState.bulkHeaderRenamePrefix,
+                bulkHeaderRenameSuffix: defaultState.bulkHeaderRenameSuffix,
                 copyFeedback: defaultState.copyFeedback,
                 toasts: defaultState.toasts,
                 lastAutoCopiedOutput: defaultState.lastAutoCopiedOutput
@@ -148,8 +154,81 @@
         return extensionMap[format] || "txt";
     }
 
+    function cloneRows(rows) {
+        return rows.map(function (row) {
+            return row.slice();
+        });
+    }
+
     createApp({
         setup() {
+            let standardColumnKeySeed = 0;
+
+            function createColumnKey() {
+                standardColumnKeySeed += 1;
+                return "stdcol_" + standardColumnKeySeed;
+            }
+
+            function createColumnKeys(count) {
+                return Array.from({ length: count }, function () {
+                    return createColumnKey();
+                });
+            }
+
+            function normalizeHeaderToken(value) {
+                return String(value || "")
+                    .trim()
+                    .toLowerCase();
+            }
+
+            function toSnakeCase(value) {
+                return String(value || "")
+                    .normalize("NFD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+                    .replace(/[^A-Za-z0-9]+/g, "_")
+                    .replace(/^_+|_+$/g, "")
+                    .replace(/_+/g, "_")
+                    .toLowerCase();
+            }
+
+            function toCamelCase(value) {
+                const snake = toSnakeCase(value);
+                return snake.replace(/_([a-z0-9])/g, function (_match, character) {
+                    return character.toUpperCase();
+                });
+            }
+
+            function transformHeaderByMode(value, mode) {
+                if (mode === "uppercase") {
+                    return String(value || "").toUpperCase();
+                }
+
+                if (mode === "lowercase") {
+                    return String(value || "").toLowerCase();
+                }
+
+                if (mode === "snake_case") {
+                    return toSnakeCase(value);
+                }
+
+                if (mode === "camelCase") {
+                    return toCamelCase(value);
+                }
+
+                if (mode === "remove-spaces") {
+                    return String(value || "").replace(/\s+/g, "");
+                }
+
+                if (mode === "remove-accents") {
+                    return String(value || "")
+                        .normalize("NFD")
+                        .replace(/[\u0300-\u036f]/g, "");
+                }
+
+                return String(value || "");
+            }
+
             const defaultState = {
                 theme: "dark",
                 input: "",
@@ -168,10 +247,16 @@
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
                 autoCopyOutput: false,
+                standardHeaders: [],
+                standardRows: [],
+                standardColumnKeys: [],
                 columnConfigs: [],
                 draggedColumnKey: "",
                 inputSectionCollapsed: false,
                 outputSectionCollapsed: false,
+                bulkHeaderRenameMode: "snake_case",
+                bulkHeaderRenamePrefix: "",
+                bulkHeaderRenameSuffix: "",
                 copyFeedback: "",
                 toasts: [],
                 lastAutoCopiedOutput: ""
@@ -204,7 +289,10 @@
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
                     autoCopyOutput: state.autoCopyOutput,
                     inputSectionCollapsed: state.inputSectionCollapsed,
-                    outputSectionCollapsed: state.outputSectionCollapsed
+                    outputSectionCollapsed: state.outputSectionCollapsed,
+                    bulkHeaderRenameMode: state.bulkHeaderRenameMode,
+                    bulkHeaderRenamePrefix: state.bulkHeaderRenamePrefix,
+                    bulkHeaderRenameSuffix: state.bulkHeaderRenameSuffix
                 };
             }, function (preferences) {
                 window.localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
@@ -289,12 +377,24 @@
                 }
             });
 
+            watch(function () {
+                return parsedInputResult.value;
+            }, function (result) {
+                const data = result.data || { headers: [], dataRows: [] };
+                state.standardHeaders = data.headers.slice();
+                state.standardRows = cloneRows(data.dataRows);
+                state.standardColumnKeys = createColumnKeys(data.headers.length);
+            }, { immediate: true });
+
             const standardObject = computed(function () {
-                return parsedInputResult.value.data;
+                return {
+                    headers: state.standardHeaders,
+                    dataRows: state.standardRows
+                };
             });
 
             const previewRows = computed(function () {
-                return standardObject.value.dataRows.slice(0, 50);
+                return standardObject.value.dataRows;
             });
 
             const previewMeta = computed(function () {
@@ -315,7 +415,7 @@
             const availableColumns = computed(function () {
                 return standardObject.value.headers.map(function (header, index) {
                     return {
-                        key: header + "__" + index,
+                        key: state.standardColumnKeys[index] || ("stdcol_fallback_" + index),
                         header: header,
                         sourceIndex: index
                     };
@@ -328,19 +428,91 @@
                     return accumulator;
                 }, {});
 
-                state.columnConfigs = nextColumns.map(function (column) {
-                    const previous = previousByKey[column.key];
+                const nextByKey = nextColumns.reduce(function (accumulator, column) {
+                    accumulator[column.key] = column;
+                    return accumulator;
+                }, {});
+
+                const preservedColumns = state.columnConfigs
+                    .filter(function (column) {
+                        return Object.prototype.hasOwnProperty.call(nextByKey, column.key);
+                    })
+                    .map(function (column) {
+                        const nextColumn = nextByKey[column.key];
+                        return {
+                            key: nextColumn.key,
+                            header: nextColumn.header,
+                            sourceIndex: nextColumn.sourceIndex,
+                            enabled: column.enabled,
+                            outputName: column.outputName,
+                            sqlType: column.sqlType,
+                            avroType: column.avroType
+                        };
+                    });
+
+                const newColumns = nextColumns
+                    .filter(function (column) {
+                        return !Object.prototype.hasOwnProperty.call(previousByKey, column.key);
+                    })
+                    .map(function (column) {
+                        const previous = previousByKey[column.key];
+                        return {
+                            key: column.key,
+                            header: column.header,
+                            sourceIndex: column.sourceIndex,
+                            enabled: previous ? previous.enabled : true,
+                            outputName: previous ? previous.outputName : column.header,
+                            sqlType: previous ? previous.sqlType : "",
+                            avroType: previous ? previous.avroType : ""
+                        };
+                    });
+
+                state.columnConfigs = preservedColumns.concat(newColumns).map(function (column) {
                     return {
                         key: column.key,
                         header: column.header,
                         sourceIndex: column.sourceIndex,
-                        enabled: previous ? previous.enabled : true,
-                        outputName: previous ? previous.outputName : column.header,
-                        sqlType: previous ? previous.sqlType : "",
-                        avroType: previous ? previous.avroType : ""
+                        enabled: column.enabled,
+                        outputName: column.outputName || column.header,
+                        sqlType: column.sqlType || "",
+                        avroType: column.avroType || ""
                     };
                 });
             }, { immediate: true });
+
+            const duplicateHeaders = computed(function () {
+                const counts = standardObject.value.headers.reduce(function (accumulator, header) {
+                    const token = normalizeHeaderToken(header);
+                    if (!token) {
+                        return accumulator;
+                    }
+
+                    accumulator[token] = accumulator[token] || {
+                        name: String(header),
+                        count: 0
+                    };
+                    accumulator[token].count += 1;
+                    return accumulator;
+                }, {});
+
+                return Object.keys(counts)
+                    .map(function (key) {
+                        return counts[key];
+                    })
+                    .filter(function (entry) {
+                        return entry.count > 1;
+                    });
+            });
+
+            const duplicateHeaderMessage = computed(function () {
+                if (!duplicateHeaders.value.length) {
+                    return "";
+                }
+
+                return "Colunas duplicadas detectadas: " + duplicateHeaders.value.map(function (entry) {
+                    return entry.name;
+                }).join(", ") + ".";
+            });
 
             const selectedColumns = computed(function () {
                 return state.columnConfigs.filter(function (column) {
@@ -564,6 +736,14 @@
                 );
             });
 
+            watch(function () {
+                return duplicateHeaderMessage.value;
+            }, function (message, previousMessage) {
+                if (message && message !== previousMessage) {
+                    pushToast(message, "warning");
+                }
+            });
+
             function pushToast(message, tone) {
                 const id = Date.now() + Math.random();
                 state.toasts.push({
@@ -585,6 +765,154 @@
                 if (toastIndex !== -1) {
                     state.toasts.splice(toastIndex, 1);
                 }
+            }
+
+            function syncOutputNameForHeader(columnIndex, nextHeader, previousHeader) {
+                const columnKey = state.standardColumnKeys[columnIndex];
+                const targetColumn = state.columnConfigs.find(function (column) {
+                    return column.key === columnKey;
+                });
+
+                if (targetColumn) {
+                    targetColumn.header = nextHeader;
+                    if (!targetColumn.outputName || targetColumn.outputName === previousHeader) {
+                        targetColumn.outputName = nextHeader;
+                    }
+                }
+            }
+
+            function updateStandardHeader(columnIndex, nextHeader) {
+                if (columnIndex < 0 || columnIndex >= state.standardHeaders.length) {
+                    return;
+                }
+
+                const previousHeader = state.standardHeaders[columnIndex];
+                state.standardHeaders[columnIndex] = nextHeader;
+                syncOutputNameForHeader(columnIndex, nextHeader, previousHeader);
+            }
+
+            function updateStandardCell(rowIndex, columnIndex, nextValue) {
+                if (rowIndex < 0 || rowIndex >= state.standardRows.length) {
+                    return;
+                }
+
+                while (state.standardRows[rowIndex].length < state.standardHeaders.length) {
+                    state.standardRows[rowIndex].push("");
+                }
+
+                state.standardRows[rowIndex][columnIndex] = nextValue;
+            }
+
+            function addStandardRow() {
+                state.standardRows.push(Array.from({ length: state.standardHeaders.length }, function () {
+                    return "";
+                }));
+            }
+
+            function removeStandardRow(rowIndex) {
+                if (rowIndex < 0 || rowIndex >= state.standardRows.length) {
+                    return;
+                }
+
+                state.standardRows.splice(rowIndex, 1);
+            }
+
+            function moveStandardRow(rowIndex, direction) {
+                const targetIndex = rowIndex + direction;
+                if (
+                    rowIndex < 0
+                    || rowIndex >= state.standardRows.length
+                    || targetIndex < 0
+                    || targetIndex >= state.standardRows.length
+                ) {
+                    return;
+                }
+
+                const movedRow = state.standardRows.splice(rowIndex, 1)[0];
+                state.standardRows.splice(targetIndex, 0, movedRow);
+            }
+
+            function addStandardColumn() {
+                const nextIndex = state.standardHeaders.length;
+                const nextHeader = "Col" + (nextIndex + 1);
+
+                state.standardHeaders.push(nextHeader);
+                state.standardColumnKeys.push(createColumnKey());
+                state.standardRows.forEach(function (row) {
+                    row.push("");
+                });
+            }
+
+            function removeStandardColumn(columnIndex) {
+                if (columnIndex < 0 || columnIndex >= state.standardHeaders.length) {
+                    return;
+                }
+
+                const removedKey = state.standardColumnKeys[columnIndex];
+                state.standardHeaders.splice(columnIndex, 1);
+                state.standardColumnKeys.splice(columnIndex, 1);
+                state.standardRows.forEach(function (row) {
+                    row.splice(columnIndex, 1);
+                });
+                state.columnConfigs = state.columnConfigs.filter(function (column) {
+                    return column.key !== removedKey;
+                });
+            }
+
+            function moveStandardColumn(columnIndex, direction) {
+                const targetIndex = columnIndex + direction;
+                if (
+                    columnIndex < 0
+                    || columnIndex >= state.standardHeaders.length
+                    || targetIndex < 0
+                    || targetIndex >= state.standardHeaders.length
+                ) {
+                    return;
+                }
+
+                const movedHeader = state.standardHeaders.splice(columnIndex, 1)[0];
+                const movedKey = state.standardColumnKeys.splice(columnIndex, 1)[0];
+                state.standardHeaders.splice(targetIndex, 0, movedHeader);
+                state.standardColumnKeys.splice(targetIndex, 0, movedKey);
+                state.standardRows.forEach(function (row) {
+                    const movedCell = row.splice(columnIndex, 1)[0];
+                    row.splice(targetIndex, 0, movedCell);
+                });
+            }
+
+            function applyBulkHeaderRename() {
+                if (!state.standardHeaders.length) {
+                    pushToast("Nao ha colunas para renomear.", "warning");
+                    return;
+                }
+
+                state.standardHeaders = state.standardHeaders.map(function (header, index) {
+                    const previousHeader = header;
+                    const transformed = transformHeaderByMode(header, state.bulkHeaderRenameMode);
+                    const nextHeader = state.bulkHeaderRenamePrefix + transformed + state.bulkHeaderRenameSuffix;
+                    syncOutputNameForHeader(index, nextHeader, previousHeader);
+                    return nextHeader;
+                });
+
+                pushToast("Renomeacao em massa aplicada nas colunas.", "success");
+            }
+
+            function dedupeStandardHeaders() {
+                const counts = {};
+
+                state.standardHeaders = state.standardHeaders.map(function (header, index) {
+                    const token = normalizeHeaderToken(header) || ("col" + (index + 1));
+                    counts[token] = (counts[token] || 0) + 1;
+                    if (counts[token] === 1) {
+                        return header;
+                    }
+
+                    const nextHeader = String(header || ("Col" + (index + 1))) + "_" + counts[token];
+                    syncOutputNameForHeader(index, nextHeader, header);
+                    return nextHeader;
+                });
+
+                pushToast("Colunas duplicadas foram ajustadas.", "success");
             }
 
             function moveColumn(draggedKey, targetKey) {
@@ -646,6 +974,8 @@
                 standardObject,
                 previewRows,
                 previewMeta,
+                duplicateHeaders,
+                duplicateHeaderMessage,
                 output,
                 visibleOutput,
                 isXmlOutput,
@@ -662,6 +992,16 @@
                 endColumnDrag,
                 toggleSection,
                 toggleTheme,
+                updateStandardHeader,
+                updateStandardCell,
+                addStandardRow,
+                removeStandardRow,
+                moveStandardRow,
+                addStandardColumn,
+                removeStandardColumn,
+                moveStandardColumn,
+                applyBulkHeaderRename,
+                dedupeStandardHeaders,
                 copyOutput,
                 downloadOutput,
                 dismissToast
@@ -747,6 +1087,34 @@
                                     </button>
 
                                     <div v-show="!state.outputSectionCollapsed" class="mt-3">
+                                        <div class="mb-4">
+                                            <label class="form-label fw-semibold">Renomeacao em massa</label>
+                                            <div class="row g-2">
+                                                <div class="col-12">
+                                                    <select class="form-select form-select-sm" v-model="state.bulkHeaderRenameMode">
+                                                        <option value="keep">Manter texto</option>
+                                                        <option value="uppercase">UPPERCASE</option>
+                                                        <option value="lowercase">lowercase</option>
+                                                        <option value="snake_case">snake_case</option>
+                                                        <option value="camelCase">camelCase</option>
+                                                        <option value="remove-spaces">Remover espacos</option>
+                                                        <option value="remove-accents">Remover acentos</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <input class="form-control form-control-sm" v-model="state.bulkHeaderRenamePrefix" placeholder="Prefixo">
+                                                </div>
+                                                <div class="col-6">
+                                                    <input class="form-control form-control-sm" v-model="state.bulkHeaderRenameSuffix" placeholder="Sufixo">
+                                                </div>
+                                                <div class="col-12 d-grid">
+                                                    <button class="btn btn-outline-primary btn-sm" type="button" @click="applyBulkHeaderRename">
+                                                        <i class="fas fa-text-width me-2" aria-hidden="true"></i>Aplicar nas colunas
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+
                                         <div class="mb-3">
                                             <label class="form-label fw-semibold">Colunas</label>
                                             <div class="small text-secondary mb-2">Marque para incluir no resultado e arraste para reordenar.</div>
@@ -881,17 +1249,75 @@
                                             <div class="small text-secondary">{{ previewMeta }}</div>
                                         </div>
 
+                                        <div v-if="duplicateHeaderMessage" class="status-chip warning mb-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
+                                            <span>{{ duplicateHeaderMessage }}</span>
+                                            <button class="btn btn-sm btn-outline-warning" type="button" @click="dedupeStandardHeaders">
+                                                <i class="fas fa-magic me-2" aria-hidden="true"></i>Corrigir duplicadas
+                                            </button>
+                                        </div>
+
+                                        <div v-if="standardObject.headers.length" class="d-flex align-items-center justify-content-between gap-2 flex-wrap mb-3">
+                                            <div class="small text-secondary">Edite headers e valores diretamente na grade.</div>
+                                            <div class="d-flex gap-2 flex-wrap">
+                                                <button class="btn btn-outline-primary btn-sm" type="button" @click="addStandardColumn">
+                                                    <i class="fas fa-columns me-2" aria-hidden="true"></i>Adicionar coluna
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" type="button" @click="addStandardRow">
+                                                    <i class="fas fa-plus me-2" aria-hidden="true"></i>Adicionar linha
+                                                </button>
+                                            </div>
+                                        </div>
+
                                         <div v-if="standardObject.headers.length" class="preview-table-wrap">
                                             <table class="table table-sm align-middle mb-0 preview-table">
                                                 <thead>
                                                     <tr>
-                                                        <th v-for="header in standardObject.headers" :key="header">{{ header }}</th>
+                                                        <th class="preview-actions-col">Linha</th>
+                                                        <th v-for="(header, headerIndex) in standardObject.headers" :key="state.standardColumnKeys[headerIndex]">
+                                                            <div class="preview-header-cell">
+                                                                <input
+                                                                    class="form-control form-control-sm preview-input"
+                                                                    :value="header"
+                                                                    @input="updateStandardHeader(headerIndex, $event.target.value)"
+                                                                    placeholder="Nome da coluna"
+                                                                >
+                                                                <div class="preview-header-actions">
+                                                                    <button class="btn btn-outline-secondary btn-sm" type="button" @click="moveStandardColumn(headerIndex, -1)" :disabled="headerIndex === 0" title="Mover para a esquerda">
+                                                                        <i class="fas fa-arrow-left" aria-hidden="true"></i>
+                                                                    </button>
+                                                                    <button class="btn btn-outline-secondary btn-sm" type="button" @click="moveStandardColumn(headerIndex, 1)" :disabled="headerIndex === standardObject.headers.length - 1" title="Mover para a direita">
+                                                                        <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                                                                    </button>
+                                                                    <button class="btn btn-outline-danger btn-sm" type="button" @click="removeStandardColumn(headerIndex)" title="Remover coluna">
+                                                                        <i class="fas fa-trash" aria-hidden="true"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
                                                     <tr v-for="(row, rowIndex) in previewRows" :key="rowIndex">
+                                                        <td class="preview-actions-col">
+                                                            <div class="preview-row-actions">
+                                                                <button class="btn btn-outline-secondary btn-sm" type="button" @click="moveStandardRow(rowIndex, -1)" :disabled="rowIndex === 0" title="Subir linha">
+                                                                    <i class="fas fa-arrow-up" aria-hidden="true"></i>
+                                                                </button>
+                                                                <button class="btn btn-outline-secondary btn-sm" type="button" @click="moveStandardRow(rowIndex, 1)" :disabled="rowIndex === previewRows.length - 1" title="Descer linha">
+                                                                    <i class="fas fa-arrow-down" aria-hidden="true"></i>
+                                                                </button>
+                                                                <button class="btn btn-outline-danger btn-sm" type="button" @click="removeStandardRow(rowIndex)" title="Remover linha">
+                                                                    <i class="fas fa-trash" aria-hidden="true"></i>
+                                                                </button>
+                                                            </div>
+                                                        </td>
                                                         <td v-for="(header, cellIndex) in standardObject.headers" :key="rowIndex + '-' + cellIndex">
-                                                            {{ cellIndex < row.length ? row[cellIndex] : '' }}
+                                                            <input
+                                                                class="form-control form-control-sm preview-input"
+                                                                :value="cellIndex < row.length ? row[cellIndex] : ''"
+                                                                @input="updateStandardCell(rowIndex, cellIndex, $event.target.value)"
+                                                                placeholder="-"
+                                                            >
                                                         </td>
                                                     </tr>
                                                 </tbody>
