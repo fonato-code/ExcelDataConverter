@@ -123,10 +123,12 @@
                 xmlRootTagName: "rows",
                 xmlRowTagName: "row",
                 sqlTableName: "ExcelConverter",
+                autoCopyOutput: false,
                 columnConfigs: [],
                 draggedColumnKey: "",
                 inputSectionCollapsed: false,
-                outputSectionCollapsed: false
+                outputSectionCollapsed: false,
+                copyFeedback: ""
             });
 
             watch(function () {
@@ -379,6 +381,43 @@
                 }
             });
 
+            const visibleOutput = computed(function () {
+                if (state.autoCopyOutput) {
+                    return "";
+                }
+
+                return output.value;
+            });
+
+            async function writeToClipboard(text) {
+                if (!text) {
+                    state.copyFeedback = "Sem conteudo";
+                    return;
+                }
+
+                try {
+                    await navigator.clipboard.writeText(text);
+                    state.copyFeedback = "Copiado";
+                } catch (_error) {
+                    state.copyFeedback = "Falha ao copiar";
+                }
+
+                window.setTimeout(function () {
+                    state.copyFeedback = "";
+                }, 1600);
+            }
+
+            watch(function () {
+                return {
+                    autoCopyOutput: state.autoCopyOutput,
+                    output: output.value
+                };
+            }, function (current) {
+                if (current.autoCopyOutput && current.output) {
+                    writeToClipboard(current.output);
+                }
+            });
+
             function moveColumn(draggedKey, targetKey) {
                 if (!draggedKey || !targetKey || draggedKey === targetKey) {
                     return;
@@ -427,11 +466,16 @@
                 state.theme = state.theme === "light" ? "dark" : "light";
             }
 
+            function copyOutput() {
+                writeToClipboard(output.value);
+            }
+
             return {
                 state,
                 statusMessage,
                 inputFormatError,
                 output,
+                visibleOutput,
                 isXmlOutput,
                 isSqlOutput,
                 showDefaultInputConfig,
@@ -445,7 +489,8 @@
                 dropColumn,
                 endColumnDrag,
                 toggleSection,
-                toggleTheme
+                toggleTheme,
+                copyOutput
             };
         },
         template: `
@@ -458,8 +503,8 @@
                             <div class="card-body p-4 sidebar-scroll">
                                 <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
                                     <div class="sidebar-title mb-0">Configuracoes</div>
-                                    <button class="theme-toggle" type="button" @click="toggleTheme">
-                                        {{ state.theme === 'light' ? 'Escuro' : 'Claro' }}
+                                    <button class="theme-toggle" type="button" @click="toggleTheme" :title="state.theme === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'">
+                                        <i :class="state.theme === 'light' ? 'fas fa-moon-stars' : 'fas fa-sun'" aria-hidden="true"></i>
                                     </button>
                                 </div>
 
@@ -471,7 +516,7 @@
                                     <button class="config-section-toggle" type="button" @click="toggleSection('input')">
                                         <div class="d-flex align-items-center justify-content-between gap-3">
                                             <div class="editor-label mb-0">Input</div>
-                                            <span class="config-section-chevron" :class="{ 'is-collapsed': state.inputSectionCollapsed }">▼</span>
+                                            <i class="fas fa-chevron-down config-section-chevron" :class="{ 'is-collapsed': state.inputSectionCollapsed }" aria-hidden="true"></i>
                                         </div>
                                     </button>
 
@@ -502,7 +547,7 @@
                                     <button class="config-section-toggle" type="button" @click="toggleSection('output')">
                                         <div class="d-flex align-items-center justify-content-between gap-3">
                                             <div class="editor-label mb-0">Output</div>
-                                            <span class="config-section-chevron" :class="{ 'is-collapsed': state.outputSectionCollapsed }">▼</span>
+                                            <i class="fas fa-chevron-down config-section-chevron" :class="{ 'is-collapsed': state.outputSectionCollapsed }" aria-hidden="true"></i>
                                         </div>
                                     </button>
 
@@ -607,20 +652,37 @@
                                                 <div class="editor-label mb-1">Output</div>
                                                 <h3 class="h5 mb-0">Resultado convertido</h3>
                                             </div>
-                                            <div class="col-12 col-sm-4 col-lg-5 col-xxl-4 px-0">
-                                                <select class="form-select form-select-sm" v-model="state.outputFormat">
-                                                    <option v-for="format in outputFormats" :key="format.value" :value="format.value">
-                                                        {{ format.label }}
-                                                    </option>
-                                                </select>
+                                            <div class="col-12 col-lg-8 col-xxl-7 px-0">
+                                                <div class="input-group input-group-sm">
+                                                    <select class="form-select" v-model="state.outputFormat">
+                                                        <option v-for="format in outputFormats" :key="format.value" :value="format.value">
+                                                            {{ format.label }}
+                                                        </option>
+                                                    </select>
+                                                    <button class="btn btn-outline-primary" type="button" @click="copyOutput" :title="state.copyFeedback || 'Copiar resultado'">
+                                                        <i
+                                                            :class="state.copyFeedback === 'Copiado' ? 'fas fa-check' : state.copyFeedback === 'Falha ao copiar' ? 'fas fa-exclamation-triangle' : state.copyFeedback === 'Sem conteudo' ? 'fas fa-ban' : 'fas fa-copy'"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                    </button>
+                                                    <button
+                                                        class="btn"
+                                                        :class="state.autoCopyOutput ? 'btn-success' : 'btn-outline-secondary'"
+                                                        type="button"
+                                                        @click="state.autoCopyOutput = !state.autoCopyOutput"
+                                                        :title="state.autoCopyOutput ? 'Desativar auto copia' : 'Ativar auto copia'"
+                                                    >
+                                                        <i :class="state.autoCopyOutput ? 'fas fa-clipboard-check' : 'fas fa-clipboard'" aria-hidden="true"></i>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                         <textarea
                                             class="form-control editor-textarea"
-                                            :value="output"
+                                            :value="visibleOutput"
                                             readonly
                                             spellcheck="false"
-                                            placeholder="O resultado convertido sera exibido aqui"
+                                            :placeholder="state.autoCopyOutput ? 'Auto copiar ativo. O resultado sera enviado direto para a area de transferencia.' : 'O resultado convertido sera exibido aqui'"
                                         ></textarea>
                                     </div>
                                 </div>

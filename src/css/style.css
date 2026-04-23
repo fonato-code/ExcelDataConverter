@@ -234,7 +234,12 @@ textarea {
     background: var(--ec-button-bg);
     color: var(--ec-ink);
     border-radius: 999px;
-    padding: 0.45rem 0.8rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     font-size: 0.82rem;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -273,6 +278,12 @@ textarea {
 .form-control:focus {
     border-color: rgba(53, 92, 255, 0.4);
     box-shadow: 0 0 0 0.25rem var(--ec-focus-ring);
+}
+
+.input-group .btn i,
+.theme-toggle i,
+.config-section-chevron {
+    line-height: 1;
 }
 
 @media (max-width: 991.98px) {
