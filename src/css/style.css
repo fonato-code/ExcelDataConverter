@@ -22,6 +22,9 @@ body {
         linear-gradient(180deg, #f8fbff 0%, var(--ec-bg) 100%);
 }
 
+textarea {
+    height: 400px;
+}
 
 .app-wrap {
     position: relative;

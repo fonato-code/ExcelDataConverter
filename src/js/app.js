@@ -1,5 +1,8 @@
 (function () {
     const { createApp, computed, reactive, watch } = Vue;
+    const inputConfig = window.ExcelConverterInputConfig || [];
+    const outputFormats = window.ExcelConverterOutputFormats || [];
+    const outputBuilders = window.ExcelConverterOutputBuilders || {};
 
     function detectDelimiter(text) {
         const scores = {
@@ -256,241 +259,27 @@
         });
     }
 
-    function buildHtmlTable(rows, headers, includeHeader) {
-        const headMarkup = includeHeader
-            ? [
-                "  <thead>",
-                "    <tr>",
-                headers.map(function (header) {
-                    return "      <th>" + formatCellForHtml(header) + "</th>";
-                }).join("\n"),
-                "    </tr>",
-                "  </thead>"
-            ].join("\n")
-            : "";
-
-        const bodyMarkup = [
-            "  <tbody>",
-            rows.map(function (row) {
-                return [
-                    "    <tr>",
-                    headers.map(function (_header, index) {
-                        const cellValue = index < row.length ? row[index] : "";
-                        return "      <td>" + formatCellForHtml(cellValue) + "</td>";
-                    }).join("\n"),
-                    "    </tr>"
-                ].join("\n");
-            }).join("\n"),
-            "  </tbody>"
-        ].join("\n");
-
-        return [
-            "<table>",
-            headMarkup,
-            bodyMarkup,
-            "</table>"
-        ].filter(Boolean).join("\n");
-    }
-
-    function buildColumnArrays(rows, headers) {
-        return headers.reduce(function (result, header, columnIndex) {
-            result[header] = rows.map(function (row) {
-                return columnIndex < row.length ? row[columnIndex] : "";
-            });
-            return result;
-        }, {});
-    }
-
-    function buildDictionary(rows, headers) {
-        const valueHeaders = headers.slice(1);
-        return rows.reduce(function (result, row) {
-            if (!row.length) {
-                return result;
-            }
-
-            const key = String(row[0]);
-            result[key] = valueHeaders.reduce(function (entry, header, index) {
-                const rowIndex = index + 1;
-                entry[header] = rowIndex < row.length ? row[rowIndex] : "";
-                return entry;
-            }, {});
-            return result;
-        }, {});
-    }
-
-    function inferSqlType(rows, columnIndex) {
-        const values = rows
-            .map(function (row) {
-                return columnIndex < row.length ? row[columnIndex] : "";
-            })
-            .filter(function (value) {
-                return value !== "";
-            });
-
-        if (!values.length) {
-            return "VARCHAR(255)";
-        }
-
-        const allNumbers = values.every(function (value) {
-            return isNumericValue(value);
-        });
-
-        if (allNumbers && values.every(function (value) { return Number.isInteger(value); })) {
-            return "INT";
-        }
-
-        if (allNumbers) {
-            return "DECIMAL(18,6)";
-        }
-
-        return "VARCHAR(255)";
-    }
-
-    function formatSqlValue(value) {
-        if (value === "") {
-            return "NULL";
-        }
-
-        if (isNumericValue(value)) {
-            return String(value);
-        }
-
-        return "'" + escapeSqlString(value) + "'";
-    }
-
-    function buildSql(headers, rows, tableName) {
-        const resolvedTableName = sanitizeSqlIdentifier(tableName || "ExcelConverter");
-        const columnDefinitions = headers.map(function (header, index) {
-            return "\t" + sanitizeSqlIdentifier(header) + " " + inferSqlType(rows, index);
-        });
-        const insertColumns = headers.map(function (header) {
-            return sanitizeSqlIdentifier(header);
-        }).join(",");
-        const values = rows.map(function (row) {
-            return "\t(" + headers.map(function (_header, index) {
-                return formatSqlValue(index < row.length ? row[index] : "");
-            }).join(",") + ")";
-        }).join(",\n");
-
-        return [
-            "CREATE TABLE " + resolvedTableName + " (",
-            "\tid INT NOT NULL AUTO_INCREMENT PRIMARY KEY,",
-            columnDefinitions.join(",\n"),
-            ");",
-            "INSERT INTO " + resolvedTableName,
-            "\t(" + insertColumns + ")",
-            "VALUES",
-            values + ";"
-        ].join("\n");
-    }
-
-    function formatPhpValue(value) {
-        if (value === "") {
-            return "\"\"";
-        }
-
-        if (isNumericValue(value)) {
-            return String(value);
-        }
-
-        return "\"" + escapePhpString(value) + "\"";
-    }
-
-    function buildPhpArray(headers, rows) {
-        return [
-            "array(",
-            rows.map(function (row) {
-                return "\tarray(" + headers.map(function (header, index) {
-                    const cellValue = index < row.length ? row[index] : "";
-                    return "\"" + escapePhpString(header) + "\"=>" + formatPhpValue(cellValue);
-                }).join(",") + ")";
-            }).join(",\n"),
-            ");"
-        ].join("\n");
-    }
-
-    function buildXmlProperties(headers, rows, rootTagName, rowTagName) {
-        const rootTag = sanitizeXmlTagName(rootTagName || "rows", "rows");
-        const rowTag = sanitizeXmlTagName(rowTagName || "row", "row");
-        const lines = [
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<" + rootTag + ">"
-        ];
-
-        rows.forEach(function (row) {
-            const attributes = headers.map(function (header, index) {
-                const cellValue = index < row.length ? row[index] : "";
-                return sanitizeXmlTagName(header, "Col" + (index + 1)) + "=\"" + escapeXml(cellValue) + "\"";
-            }).join(" ");
-            lines.push("\t<" + rowTag + " " + attributes + "></" + rowTag + ">");
-        });
-
-        lines.push("</" + rootTag + ">");
-        return lines.join("\n");
-    }
-
-    function buildXmlNodes(headers, rows, rootTagName, rowTagName) {
-        const xmlHeaders = headers.map(function (header, index) {
-            return sanitizeXmlTagName(header, "Col" + (index + 1));
-        });
-        const rootTag = sanitizeXmlTagName(rootTagName || "rows", "rows");
-        const rowTag = sanitizeXmlTagName(rowTagName || "row", "row");
-        const lines = [
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<" + rootTag + ">"
-        ];
-
-        rows.forEach(function (row) {
-            lines.push("\t<" + rowTag + ">");
-            xmlHeaders.forEach(function (header, index) {
-                const cellValue = index < row.length ? row[index] : "";
-                lines.push("\t\t<" + header + ">" + escapeXml(cellValue) + "</" + header + ">");
-            });
-            lines.push("\t</" + rowTag + ">");
-        });
-
-        lines.push("</" + rootTag + ">");
-        return lines.join("\n");
-    }
-
     function buildOutput(format, headers, rows, options) {
-        if (format === "json") {
-            return JSON.stringify(buildObjectsFromRows(rows, headers), null, 2);
+        const builder = outputBuilders[format];
+        if (!builder) {
+            return "";
         }
 
-        if (format === "json-column-arrays") {
-            return JSON.stringify(buildColumnArrays(rows, headers), null, 2);
-        }
-
-        if (format === "json-row-arrays") {
-            return JSON.stringify(rows, null, 2);
-        }
-
-        if (format === "json-dictionary") {
-            return JSON.stringify(buildDictionary(rows, headers), null, 2);
-        }
-
-        if (format === "html-table") {
-            return buildHtmlTable(rows, headers, true);
-        }
-
-        if (format === "sql") {
-            return buildSql(headers, rows, options.sqlTableName);
-        }
-
-        if (format === "php") {
-            return buildPhpArray(headers, rows);
-        }
-
-        if (format === "xml-properties") {
-            return buildXmlProperties(headers, rows, options.xmlRootTagName, options.xmlRowTagName);
-        }
-
-        if (format === "xml-nodes") {
-            return buildXmlNodes(headers, rows, options.xmlRootTagName, options.xmlRowTagName);
-        }
-
-        return "";
+        return builder({
+            headers: headers,
+            rows: rows,
+            options: options,
+            utils: {
+                buildObjectsFromRows: buildObjectsFromRows,
+                formatCellForHtml: formatCellForHtml,
+                escapeSqlString: escapeSqlString,
+                escapePhpString: escapePhpString,
+                escapeXml: escapeXml,
+                sanitizeSqlIdentifier: sanitizeSqlIdentifier,
+                sanitizeXmlTagName: sanitizeXmlTagName,
+                isNumericValue: isNumericValue
+            }
+        });
     }
 
     createApp({
@@ -602,11 +391,17 @@
             });
 
             const isXmlOutput = computed(function () {
-                return state.outputFormat === "xml-properties" || state.outputFormat === "xml-nodes";
+                const selectedFormat = outputFormats.find(function (format) {
+                    return format.value === state.outputFormat;
+                });
+                return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.xml);
             });
 
             const isSqlOutput = computed(function () {
-                return state.outputFormat === "sql";
+                const selectedFormat = outputFormats.find(function (format) {
+                    return format.value === state.outputFormat;
+                });
+                return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.sql);
             });
 
             const output = computed(function () {
@@ -684,6 +479,8 @@
                 output,
                 isXmlOutput,
                 isSqlOutput,
+                inputConfig,
+                outputFormats,
                 startColumnDrag,
                 dropColumn,
                 endColumnDrag,
@@ -699,8 +496,6 @@
                             <div class="sidebar-accent"></div>
                             <div class="card-body p-4 sidebar-scroll">
                                 <div class="sidebar-title mb-2">Configuracoes</div>
-                                <h2 class="h4 mb-3">Controle da conversao</h2>
-                                <p class="text-secondary mb-4">Ajuste como o texto colado deve ser interpretado antes de gerar o output.</p>
 
                                 <div class="border rounded-4 p-3 mb-4 bg-white bg-opacity-50">
                                     <button class="config-section-toggle" type="button" @click="toggleSection('input')">
@@ -711,35 +506,24 @@
                                     </button>
 
                                     <div v-show="!state.inputSectionCollapsed" class="mt-3">
-                                        <div class="mb-3">
-                                            <label for="delimiter" class="form-label fw-semibold">Delimiter</label>
-                                            <select id="delimiter" class="form-select" v-model="state.delimiter">
-                                                <option value="auto">Auto</option>
-                                                <option value="comma">Comma</option>
-                                                <option value="tab">Tab</option>
-                                            </select>
-                                        </div>
+                                        <div
+                                            v-for="field in inputConfig"
+                                            :key="field.id"
+                                            :class="field.type === 'checkbox' ? 'form-check form-switch mb-3' : 'mb-3'"
+                                        >
+                                            <template v-if="field.type === 'select'">
+                                                <label :for="field.id" class="form-label fw-semibold">{{ field.label }}</label>
+                                                <select :id="field.id" class="form-select form-select-sm" v-model="state[field.id]">
+                                                    <option v-for="option in field.options" :key="option.value" :value="option.value">
+                                                        {{ option.label }}
+                                                    </option>
+                                                </select>
+                                            </template>
 
-                                        <div class="mb-3">
-                                            <label for="decimal-sign" class="form-label fw-semibold">DecimalSign</label>
-                                            <select id="decimal-sign" class="form-select" v-model="state.decimalSign">
-                                                <option value="dot">Dot</option>
-                                                <option value="comma">Comma</option>
-                                            </select>
-                                        </div>
-
-                                        <div class="form-check form-switch mb-3">
-                                            <input id="header-row" class="form-check-input" type="checkbox" role="switch" v-model="state.firstRowIsHeader">
-                                            <label class="form-check-label fw-semibold" for="header-row">First row is header</label>
-                                        </div>
-
-                                        <div>
-                                            <label for="header-transform" class="form-label fw-semibold">Header transform</label>
-                                            <select id="header-transform" class="form-select" v-model="state.headerTransform">
-                                                <option value="none">none</option>
-                                                <option value="uppercase">uppercase</option>
-                                                <option value="downcase">downcase</option>
-                                            </select>
+                                            <template v-else-if="field.type === 'checkbox'">
+                                                <input :id="field.id" class="form-check-input" type="checkbox" role="switch" v-model="state[field.id]">
+                                                <label class="form-check-label fw-semibold" :for="field.id">{{ field.label }}</label>
+                                            </template>
                                         </div>
                                     </div>
                                 </div>
@@ -838,16 +622,10 @@
                                                 <h3 class="h5 mb-0">Resultado convertido</h3>
                                             </div>
                                             <div class="col-12 col-sm-4 col-lg-5 col-xxl-4 px-0">
-                                                <select class="form-select" v-model="state.outputFormat">
-                                                    <option value="json">JSON</option>
-                                                    <option value="json-column-arrays">JSON Column Arrays</option>
-                                                    <option value="json-row-arrays">JSON RowArrays</option>
-                                                    <option value="json-dictionary">JSON Dictionary</option>
-                                                    <option value="html-table">HTML - Tables</option>
-                                                    <option value="sql">SQL</option>
-                                                    <option value="php">PHP</option>
-                                                    <option value="xml-properties">XML - Properties</option>
-                                                    <option value="xml-nodes">XML - Nodes</option>
+                                                <select class="form-select form-select-sm" v-model="state.outputFormat">
+                                                    <option v-for="format in outputFormats" :key="format.value" :value="format.value">
+                                                        {{ format.label }}
+                                                    </option>
                                                 </select>
                                             </div>
                                         </div>
