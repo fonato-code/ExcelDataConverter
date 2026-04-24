@@ -1804,19 +1804,62 @@
                     return;
                 }
 
-                if (type === "toggleRowOutput") {
-                    const rowKey = payload.rowKey;
-                    const rowConfig = state.rowConfigs.find(function (rc) {
-                        return rc.key === rowKey;
-                    });
+                if (type === "previewSearch") {
+                    state.previewSearch = payload.previewSearch != null ? String(payload.previewSearch) : "";
+                    counters.applied += 1;
+                    return;
+                }
 
-                    if (rowConfig && typeof payload.enabled === "boolean") {
-                        rowConfig.enabled = payload.enabled;
-                        counters.applied += 1;
-                    } else {
-                        counters.skipped += 1;
+                if (type === "previewSort") {
+                    const direction = payload.previewSortDirection || "none";
+                    let sortKey = payload.previewSortColumnKey || payload.columnKey || "";
+
+                    if (sortKey && state.standardColumnKeys.indexOf(sortKey) === -1) {
+                        sortKey = "";
                     }
 
+                    if (!sortKey && payload.columnHeader) {
+                        const hi = state.standardHeaders.indexOf(payload.columnHeader);
+                        if (hi !== -1) {
+                            sortKey = state.standardColumnKeys[hi];
+                        }
+                    }
+
+                    if (direction === "none") {
+                        state.previewSortColumnKey = "";
+                        state.previewSortDirection = "none";
+                    } else {
+                        if (!sortKey) {
+                            counters.skipped += 1;
+                            return;
+                        }
+
+                        state.previewSortColumnKey = sortKey;
+                        state.previewSortDirection = direction === "desc" ? "desc" : "asc";
+                    }
+
+                    state.previewPage = 1;
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "columnFilter") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    mergeColumnConfigFromPayload(idx, {
+                        filterOperator: payload.filterOperator !== undefined ? payload.filterOperator : "",
+                        filterValue: payload.filterValue !== undefined ? payload.filterValue : "",
+                        filterValueTo: payload.filterValueTo !== undefined ? payload.filterValueTo : ""
+                    });
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "toggleRowOutput") {
                     return;
                 }
 
@@ -2134,10 +2177,6 @@
 
                 if (targetConfig) {
                     targetConfig.enabled = !targetConfig.enabled;
-                    logPreviewAction("toggleRowOutput", (targetConfig.enabled ? "Exibir" : "Ocultar") + " linha no output", {
-                        rowKey: rowKey,
-                        enabled: targetConfig.enabled
-                    });
                 }
             }
 
@@ -2834,12 +2873,33 @@
                 state.sidebarOpen = !state.sidebarOpen;
             }
 
+            function logPreviewSortState() {
+                const key = state.previewSortColumnKey;
+                const direction = state.previewSortDirection;
+                let summary = "Ordenacao do preview: nenhuma";
+                let columnHeader = "";
+
+                if (key && direction !== "none") {
+                    const idx = state.standardColumnKeys.indexOf(key);
+                    columnHeader = idx !== -1 ? String(state.standardHeaders[idx] || "") : "";
+                    summary = "Ordenacao do preview: \"" + (columnHeader || key) + "\" (" + direction + ")";
+                }
+
+                logPreviewAction("previewSort", summary, {
+                    previewSortColumnKey: key || "",
+                    previewSortDirection: direction,
+                    columnKey: key || "",
+                    columnHeader: columnHeader
+                });
+            }
+
             function cyclePreviewSort(columnIndex) {
                 const columnKey = state.standardColumnKeys[columnIndex];
                 if (state.previewSortColumnKey !== columnKey) {
                     state.previewSortColumnKey = columnKey;
                     state.previewSortDirection = "asc";
                     state.previewPage = 1;
+                    logPreviewSortState();
                     return;
                 }
 
@@ -2853,6 +2913,47 @@
                 }
 
                 state.previewPage = 1;
+                logPreviewSortState();
+            }
+
+            function logColumnFilterSnapshot(columnIndex) {
+                if (columnIndex < 0 || columnIndex >= state.standardHeaders.length) {
+                    return;
+                }
+
+                const col = getColumnConfigByIndex(columnIndex);
+                if (!col) {
+                    return;
+                }
+
+                const header = state.standardHeaders[columnIndex] || "";
+                const op = col.filterOperator || "";
+                let summary = "Filtro coluna \"" + header + "\": " + (op ? op : "sem filtro");
+
+                if (op === "between") {
+                    summary += " [" + String(col.filterValue || "") + " .. " + String(col.filterValueTo || "") + "]";
+                } else if (op && op !== "empty" && op !== "not-empty" && op !== "duplicates") {
+                    summary += " \"" + String(col.filterValue || "") + "\"";
+                }
+
+                logPreviewAction("columnFilter", summary, {
+                    columnKey: state.standardColumnKeys[columnIndex],
+                    columnHeader: header,
+                    filterOperator: col.filterOperator || "",
+                    filterValue: col.filterValue != null ? String(col.filterValue) : "",
+                    filterValueTo: col.filterValueTo != null ? String(col.filterValueTo) : ""
+                });
+            }
+
+            function logColumnFilterFromMenu() {
+                logColumnFilterSnapshot(getMenuColumnIndex());
+            }
+
+            function logPreviewSearchAction() {
+                const raw = state.previewSearch != null ? String(state.previewSearch) : "";
+                const q = raw.trim();
+                const summary = q ? ("Pesquisa no preview: \"" + q + "\"") : "Pesquisa no preview: (limpa)";
+                logPreviewAction("previewSearch", summary, { previewSearch: raw });
             }
 
             function getPreviewSortIcon(columnIndex) {
@@ -3059,6 +3160,8 @@
                 toggleSidebar,
                 cyclePreviewSort,
                 getPreviewSortIcon,
+                logColumnFilterFromMenu,
+                logPreviewSearchAction,
                 startSidebarResize,
                 handleInputPaste,
                 toggleTheme,
@@ -3283,18 +3386,21 @@
                                                 <div class="editor-label mb-1">Input</div>
                                                 <h3 class="h5 mb-0">Texto de origem</h3>
                                             </div>
-                                            <div class="d-flex align-items-center gap-2 col-12 col-sm-6 col-lg-7 col-xxl-6 px-0">
-                                                <select class="form-select form-select-sm" v-model="state.inputFormat">
-                                                    <option v-for="format in inputFormats" :key="format.value" :value="format.value">
-                                                        {{ format.label }}
-                                                    </option>
-                                                </select>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
-                                                    <i class="fas fa-cog" aria-hidden="true"></i>
-                                                </button>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('input')">
-                                                    <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
-                                                </button>
+                                            <div class="col-12 col-sm-6 col-lg-7 col-xxl-6 px-0">
+                                                <div class="input-group input-group-sm">
+                                                    <label class="input-group-text mb-0 d-none d-md-flex" for="input-format-select">Formato</label>
+                                                    <select id="input-format-select" class="form-select" v-model="state.inputFormat">
+                                                        <option v-for="format in inputFormats" :key="format.value" :value="format.value">
+                                                            {{ format.label }}
+                                                        </option>
+                                                    </select>
+                                                    <button class="btn btn-outline-secondary" type="button" @click="toggleSidebar" title="Configuracoes">
+                                                        <i class="fas fa-cog" aria-hidden="true"></i>
+                                                    </button>
+                                                    <button class="btn btn-outline-secondary" type="button" @click="toggleMainAccordion('input')" :title="state.inputSectionCollapsed ? 'Expandir secao' : 'Colapsar secao'">
+                                                        <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                         <div v-if="!state.inputSectionCollapsed">
@@ -3303,42 +3409,6 @@
                                             :class="inputFormatError ? 'error' : statusMessage.tone"
                                         >
                                             {{ inputFormatError || statusMessage.text }}
-                                        </div>
-                                        <div class="preset-toolbar d-flex flex-wrap align-items-center gap-2 mb-3">
-                                            <label class="form-label small mb-0 text-secondary text-nowrap" for="preset-select">Preset</label>
-                                            <select
-                                                id="preset-select"
-                                                class="form-select form-select-sm preset-select"
-                                                v-model="state.selectedPresetId"
-                                                :disabled="state.presetRunning"
-                                            >
-                                                <option value="">— Nenhum —</option>
-                                                <option v-for="p in state.presets" :key="p.id" :value="p.id">{{ p.name }}</option>
-                                            </select>
-                                            <button
-                                                class="btn btn-sm btn-outline-primary"
-                                                type="button"
-                                                @click="openPresetModal"
-                                                :disabled="state.presetRunning"
-                                            >
-                                                Novo preset
-                                            </button>
-                                            <button
-                                                class="btn btn-sm btn-primary"
-                                                type="button"
-                                                @click="executeSelectedPreset"
-                                                :disabled="!canExecutePreset || state.presetRunning"
-                                            >
-                                                Executar preset
-                                            </button>
-                                            <button
-                                                class="btn btn-sm btn-outline-danger"
-                                                type="button"
-                                                @click="deleteSelectedPreset"
-                                                :disabled="!state.selectedPresetId || state.presetRunning"
-                                            >
-                                                Remover
-                                            </button>
                                         </div>
                                         <textarea
                                             class="form-control editor-textarea"
@@ -3361,12 +3431,51 @@
                                                 <div class="editor-label mb-1">Preview</div>
                                                 <h3 class="h5 mb-0">Objeto padrao</h3>
                                             </div>
-                                            <div class="d-flex align-items-center gap-2">
-                                                <div class="small text-secondary">{{ previewMeta }}</div>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
+                                            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end flex-grow-1">
+                                                <div class="small text-secondary text-nowrap">{{ previewMeta }}</div>
+                                                <div class="input-group input-group-sm preset-toolbar-group flex-grow-1" style="min-width: min(100%, 260px); max-width: 23rem;">
+                                                    <label class="input-group-text mb-0 text-secondary small d-none d-lg-inline" for="preset-select">Preset</label>
+                                                    <select
+                                                        id="preset-select"
+                                                        class="form-select preset-select"
+                                                        v-model="state.selectedPresetId"
+                                                        :disabled="state.presetRunning"
+                                                    >
+                                                        <option value="">— Nenhum —</option>
+                                                        <option v-for="p in state.presets" :key="p.id" :value="p.id">{{ p.name }}</option>
+                                                    </select>
+                                                    <button
+                                                        class="btn btn-outline-primary"
+                                                        type="button"
+                                                        @click="openPresetModal"
+                                                        :disabled="state.presetRunning"
+                                                        title="Guardar novo preset"
+                                                    >
+                                                        <i class="fas fa-bookmark" aria-hidden="true"></i>
+                                                    </button>
+                                                    <button
+                                                        class="btn btn-primary"
+                                                        type="button"
+                                                        @click="executeSelectedPreset"
+                                                        :disabled="!canExecutePreset || state.presetRunning"
+                                                        title="Executar preset seleccionado"
+                                                    >
+                                                        <i class="fas fa-play" aria-hidden="true"></i>
+                                                    </button>
+                                                    <button
+                                                        class="btn btn-outline-danger"
+                                                        type="button"
+                                                        @click="deleteSelectedPreset"
+                                                        :disabled="!state.selectedPresetId || state.presetRunning"
+                                                        title="Remover preset seleccionado"
+                                                    >
+                                                        <i class="fas fa-trash-alt" aria-hidden="true"></i>
+                                                    </button>
+                                                </div>
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSidebar" title="Configuracoes">
                                                     <i class="fas fa-cog" aria-hidden="true"></i>
                                                 </button>
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('preview')">
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('preview')" :title="state.previewSectionCollapsed ? 'Expandir secao' : 'Colapsar secao'">
                                                     <i :class="state.previewSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
                                             </div>
@@ -3397,7 +3506,7 @@
                                             </div>
                                             <div class="input-group input-group-sm preview-search-group" style="width:400px">
                                                 <span class="input-group-text"><i class="fas fa-search" aria-hidden="true"></i></span>
-                                                <input class="form-control" v-model="state.previewSearch" placeholder="Buscar nas linhas">
+                                                <input class="form-control" v-model="state.previewSearch" placeholder="Buscar nas linhas" @change="logPreviewSearchAction">
                                                 <button class="btn btn-outline-primary" type="button" @click="addStandardColumn" title="Adicionar coluna (Ctrl+Shift+C)">
                                                     <i class="fas fa-columns" aria-hidden="true"></i>
                                                 </button>
@@ -3828,7 +3937,7 @@
                                 <div class="accordion-body">
                                     <div class="small text-secondary mb-2">So afecta a lista do preview; nao remove linhas do export.</div>
                                     <div class="preview-column-menu-group">
-                                        <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().filterOperator">
+                                        <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().filterOperator" @change="logColumnFilterFromMenu">
                                             <option value="">Sem filtro</option>
                                             <option value="contains">Contem</option>
                                             <option value="equals">Igual</option>
@@ -3843,10 +3952,10 @@
                                         </select>
                                         <div v-if="getMenuColumnConfig().filterOperator === 'between'" class="row g-2">
                                             <div class="col-6">
-                                                <input class="form-control form-control-sm" v-model="getMenuColumnConfig().filterValue" placeholder="Valor inicial">
+                                                <input class="form-control form-control-sm" v-model="getMenuColumnConfig().filterValue" placeholder="Valor inicial" @change="logColumnFilterFromMenu">
                                             </div>
                                             <div class="col-6">
-                                                <input class="form-control form-control-sm" v-model="getMenuColumnConfig().filterValueTo" placeholder="Valor final">
+                                                <input class="form-control form-control-sm" v-model="getMenuColumnConfig().filterValueTo" placeholder="Valor final" @change="logColumnFilterFromMenu">
                                             </div>
                                         </div>
                                         <input
@@ -3854,6 +3963,7 @@
                                             class="form-control form-control-sm"
                                             v-model="getMenuColumnConfig().filterValue"
                                             placeholder="Valor do filtro"
+                                            @change="logColumnFilterFromMenu"
                                         >
                                     </div>
                                 </div>

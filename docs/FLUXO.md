@@ -34,6 +34,14 @@ Não existe: o resultado aparece no textarea do Output e a cópia é **manual** 
 
 Com muitas linhas ou células, a barra de estado do preview pode mostrar um aviso. Use paginação no preview para reduzir nós no DOM.
 
+## Presets (sidebar + histórico do preview)
+
+- **O que grava**: um snapshot das opções visíveis no **sidebar** (formato de entrada/saída, delimitadores, opções SQL/XML, renomeação em massa de cabeçalhos no sidebar, largura/abertura do painel, etc.) e uma lista ordenada de **acções estruturadas** executadas no preview desde o último parse do input (sem cada edição de célula). Inclui **vista do preview** relevante para operações em massa: **filtro por coluna** (menu da coluna), **ordenação do preview** (ícone no cabeçalho) e **texto de pesquisa** do preview; a ordem no histórico replica filtro/ordem/pesquisa antes de preenchimentos em sequência, etc.
+- **O que não grava**: acções ao nível de **uma linha** isolada (duplicar linha, esconder linha no output, mover linha, editar célula) — não entram no preset.
+- **Onde fica**: `localStorage` na chave `excelconverter.presets.v1` (JSON), separada das preferências gerais da UI. A barra de presets fica no **cabeçalho da secção Preview**.
+- **Limpeza do histórico**: ao colar ou alterar o input de forma que o parse produza um novo resultado canónico, o histórico de acções do preview é **zerado** (o preset guardado continua intacto no armazenamento).
+- **Executar**: aplica primeiro o snapshot do sidebar, depois reproduz as acções em ordem; acções cuja coluna já não exista são **ignoradas** e o toast final indica quantas foram aplicadas vs ignoradas. Se o preset não tiver acções guardadas, apenas o sidebar é aplicado e o toast reflecte isso.
+
 ## Ficheiros relevantes
 
 - Lógica principal: `src/js/app.js`

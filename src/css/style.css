@@ -413,9 +413,13 @@ html {
     border: 1px solid rgba(245, 158, 11, 0.24);
 }
 
-.preset-toolbar .preset-select {
-    min-width: 10rem;
-    max-width: 16rem;
+.preset-toolbar-group .preset-select {
+    min-width: 7rem;
+    max-width: 14rem;
+}
+
+.preview-panel .preset-toolbar-group .btn {
+    flex-shrink: 0;
 }
 
 .preset-sidebar-summary,
