@@ -413,6 +413,28 @@ html {
     border: 1px solid rgba(245, 158, 11, 0.24);
 }
 
+.preset-toolbar .preset-select {
+    min-width: 10rem;
+    max-width: 16rem;
+}
+
+.preset-sidebar-summary,
+.preset-action-log {
+    max-height: 12rem;
+    overflow-y: auto;
+    padding-left: 1.1rem;
+    border: 1px solid var(--ec-border);
+    border-radius: 0.5rem;
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+    background: rgba(255, 255, 255, 0.35);
+}
+
+:root[data-theme="dark"] .preset-sidebar-summary,
+:root[data-theme="dark"] .preset-action-log {
+    background: rgba(15, 23, 42, 0.45);
+}
+
 .editor-label {
     color: var(--ec-muted);
     font-size: 0.84rem;

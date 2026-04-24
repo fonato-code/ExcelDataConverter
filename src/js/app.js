@@ -6,6 +6,23 @@
     const outputFormats = window.ExcelConverterOutputFormats || [];
     const outputBuilders = window.ExcelConverterOutputBuilders || {};
     const PREFERENCES_STORAGE_KEY = "excelconverter.preferences.v1";
+    const PRESETS_STORAGE_KEY = "excelconverter.presets.v1";
+    const PRESET_ACTION_LOG_MAX = 200;
+
+    let suppressPresetActionLog = 0;
+
+    function loadPresetsFromStorage() {
+        try {
+            const raw = window.localStorage.getItem(PRESETS_STORAGE_KEY);
+            if (!raw) {
+                return [];
+            }
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_error) {
+            return [];
+        }
+    }
 
     function normalizeHeader(value, index, transform) {
         const fallback = "column_" + (index + 1);
@@ -677,10 +694,21 @@
                 pendingFocusColumnKey: "",
                 pendingFocusRowKey: "",
                 copyFeedback: "",
-                toasts: []
+                toasts: [],
+                previewActionLog: [],
+                presets: [],
+                selectedPresetId: "",
+                presetModalOpen: false,
+                presetDraftName: "",
+                presetSaveError: "",
+                presetRunning: false
             };
 
             const state = reactive(loadPreferences(defaultState));
+
+            loadPresetsFromStorage().forEach(function (preset) {
+                state.presets.push(preset);
+            });
 
             watch(function () {
                 return state.theme;
@@ -816,6 +844,7 @@
                 state.columnConfigs = [];
                 state.rowConfigs = [];
                 state.previewPage = 1;
+                state.previewActionLog = [];
             }, { immediate: true });
 
             const standardObject = computed(function () {
@@ -1462,6 +1491,494 @@
                 }
             }
 
+            function persistPresets() {
+                try {
+                    window.localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(state.presets));
+                } catch (_error) {
+                    pushToast("Nao foi possivel guardar os presets.", "danger");
+                }
+            }
+
+            function logPreviewAction(type, summary, payload) {
+                if (suppressPresetActionLog > 0) {
+                    return;
+                }
+
+                const entry = {
+                    id: "pact_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+                    ts: new Date().toISOString(),
+                    type: type,
+                    summary: summary,
+                    payload: payload ? JSON.parse(JSON.stringify(payload)) : {}
+                };
+
+                state.previewActionLog.push(entry);
+                if (state.previewActionLog.length > PRESET_ACTION_LOG_MAX) {
+                    state.previewActionLog.splice(0, state.previewActionLog.length - PRESET_ACTION_LOG_MAX);
+                }
+            }
+
+            function buildSuggestedPresetName() {
+                const d = new Date();
+                const pad = function (n) {
+                    return String(n).padStart(2, "0");
+                };
+                return "Preset " + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + "-" + pad(d.getMinutes());
+            }
+
+            function serializeSidebarForPreset() {
+                return {
+                    theme: state.theme,
+                    inputFormat: state.inputFormat,
+                    delimiter: state.delimiter,
+                    decimalSign: state.decimalSign,
+                    firstRowIsHeader: state.firstRowIsHeader,
+                    headerTransform: state.headerTransform,
+                    outputFormat: state.outputFormat,
+                    xmlRootTagName: state.xmlRootTagName,
+                    xmlRowTagName: state.xmlRowTagName,
+                    sqlTableName: state.sqlTableName,
+                    sqlAddCreateTable: state.sqlAddCreateTable,
+                    sqlAddIdentityInsert: state.sqlAddIdentityInsert,
+                    sqlAddTransaction: state.sqlAddTransaction,
+                    sqlAddTruncate: state.sqlAddTruncate,
+                    sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    inputSectionCollapsed: state.inputSectionCollapsed,
+                    previewSectionCollapsed: state.previewSectionCollapsed,
+                    outputSectionCollapsed: state.outputSectionCollapsed,
+                    sidebarOpen: state.sidebarOpen,
+                    sidebarWidth: state.sidebarWidth,
+                    bulkHeaderRenameMode: state.bulkHeaderRenameMode,
+                    bulkHeaderRenamePrefix: state.bulkHeaderRenamePrefix,
+                    bulkHeaderRenameSuffix: state.bulkHeaderRenameSuffix
+                };
+            }
+
+            function presetSidebarSummaryLines() {
+                const s = serializeSidebarForPreset();
+                const lines = [
+                    "Tema: " + s.theme,
+                    "Formato entrada: " + s.inputFormat,
+                    "Delimitador: " + s.delimiter,
+                    "Decimal: " + s.decimalSign,
+                    "Primeira linha e cabecalho: " + (s.firstRowIsHeader ? "sim" : "nao"),
+                    "Transformacao cabecalho: " + s.headerTransform,
+                    "Formato saida: " + s.outputFormat,
+                    "XML root / row: " + s.xmlRootTagName + " / " + s.xmlRowTagName,
+                    "SQL tabela: " + s.sqlTableName,
+                    "SQL opcoes: CREATE " + (s.sqlAddCreateTable ? "sim" : "nao") + ", IDENTITY_INSERT " + (s.sqlAddIdentityInsert ? "sim" : "nao") + ", TRANSACTION " + (s.sqlAddTransaction ? "sim" : "nao") + ", TRUNCATE " + (s.sqlAddTruncate ? "sim" : "nao") + ", vazio->NULL " + (s.sqlConvertEmptyToNull ? "sim" : "nao"),
+                    "Renomeacao em massa: " + s.bulkHeaderRenameMode + " | prefixo \"" + s.bulkHeaderRenamePrefix + "\" | sufixo \"" + s.bulkHeaderRenameSuffix + "\"",
+                    "Sidebar: " + (s.sidebarOpen ? "aberta" : "fechada") + " (" + s.sidebarWidth + "px)"
+                ];
+                return lines;
+            }
+
+            function applySidebarSnapshot(snapshot) {
+                if (!snapshot || typeof snapshot !== "object") {
+                    return;
+                }
+
+                const keys = [
+                    "theme",
+                    "inputFormat",
+                    "delimiter",
+                    "decimalSign",
+                    "firstRowIsHeader",
+                    "headerTransform",
+                    "outputFormat",
+                    "xmlRootTagName",
+                    "xmlRowTagName",
+                    "sqlTableName",
+                    "sqlAddCreateTable",
+                    "sqlAddIdentityInsert",
+                    "sqlAddTransaction",
+                    "sqlAddTruncate",
+                    "sqlConvertEmptyToNull",
+                    "inputSectionCollapsed",
+                    "previewSectionCollapsed",
+                    "outputSectionCollapsed",
+                    "sidebarOpen",
+                    "sidebarWidth",
+                    "bulkHeaderRenameMode",
+                    "bulkHeaderRenamePrefix",
+                    "bulkHeaderRenameSuffix"
+                ];
+
+                keys.forEach(function (key) {
+                    if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+                        state[key] = snapshot[key];
+                    }
+                });
+
+                document.documentElement.setAttribute("data-theme", state.theme);
+                document.documentElement.setAttribute("data-bs-theme", state.theme === "dark" ? "dark" : "light");
+            }
+
+            function resolveColumnIndexForPreset(payload) {
+                if (!payload) {
+                    return -1;
+                }
+
+                if (payload.columnKey && state.standardColumnKeys.indexOf(payload.columnKey) !== -1) {
+                    return state.standardColumnKeys.indexOf(payload.columnKey);
+                }
+
+                if (payload.columnHeader) {
+                    const idx = state.standardHeaders.indexOf(payload.columnHeader);
+                    if (idx !== -1) {
+                        return idx;
+                    }
+                }
+
+                if (payload.menuColumnKey && state.standardColumnKeys.indexOf(payload.menuColumnKey) !== -1) {
+                    return state.standardColumnKeys.indexOf(payload.menuColumnKey);
+                }
+
+                if (payload.menuColumnHeader) {
+                    const idx2 = state.standardHeaders.indexOf(payload.menuColumnHeader);
+                    if (idx2 !== -1) {
+                        return idx2;
+                    }
+                }
+
+                return -1;
+            }
+
+            function mergeColumnConfigFromPayload(columnIndex, partial) {
+                const column = getColumnConfigByIndex(columnIndex);
+                if (!column || !partial) {
+                    return;
+                }
+
+                Object.keys(partial).forEach(function (key) {
+                    if (Object.prototype.hasOwnProperty.call(partial, key)) {
+                        const value = partial[key];
+                        if (key === "mergeSourceKeys" && Array.isArray(value)) {
+                            column.mergeSourceKeys = value.slice();
+                        } else {
+                            column[key] = value;
+                        }
+                    }
+                });
+            }
+
+            function dispatchPresetAction(action, counters) {
+                const type = action && action.type;
+                const payload = action && action.payload ? action.payload : {};
+
+                if (type === "bulkHeaderRename") {
+                    if (!state.standardHeaders.length) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    state.bulkHeaderRenameMode = payload.mode || state.bulkHeaderRenameMode;
+                    state.bulkHeaderRenamePrefix = payload.prefix !== undefined ? payload.prefix : state.bulkHeaderRenamePrefix;
+                    state.bulkHeaderRenameSuffix = payload.suffix !== undefined ? payload.suffix : state.bulkHeaderRenameSuffix;
+                    applyBulkHeaderRename();
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "dedupeHeaders") {
+                    if (!state.standardHeaders.length) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    dedupeStandardHeaders();
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "bulkFill") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    mergeColumnConfigFromPayload(idx, {
+                        bulkFillMode: payload.bulkFillMode,
+                        bulkFillValue: payload.bulkFillValue,
+                        bulkFillAuxValue: payload.bulkFillAuxValue,
+                        bulkFillSequenceStart: payload.bulkFillSequenceStart,
+                        bulkFillSequenceStep: payload.bulkFillSequenceStep
+                    });
+                    applyBulkFill(idx);
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "localeNormalize") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    mergeColumnConfigFromPayload(idx, {
+                        localeNormalizeMode: payload.localeNormalizeMode,
+                        localeNumberInput: payload.localeNumberInput,
+                        localeNumberOutput: payload.localeNumberOutput,
+                        localeDateInput: payload.localeDateInput,
+                        localeDateOutput: payload.localeDateOutput,
+                        localeDateOutputManual: payload.localeDateOutputManual
+                    });
+                    applyLocaleNormalization(idx);
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "columnMerge") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    let mergeKeys = Array.isArray(payload.mergeSourceKeys) ? payload.mergeSourceKeys.slice() : [];
+                    const keysMissing = mergeKeys.some(function (key) {
+                        return state.standardColumnKeys.indexOf(key) === -1;
+                    });
+
+                    if (keysMissing && Array.isArray(payload.mergeSourceHeaders) && payload.mergeSourceHeaders.length) {
+                        mergeKeys = payload.mergeSourceHeaders.map(function (headerLabel) {
+                            const headerIndex = state.standardHeaders.indexOf(headerLabel);
+                            return headerIndex !== -1 ? state.standardColumnKeys[headerIndex] : "";
+                        }).filter(Boolean);
+                    }
+
+                    if (!mergeKeys.length) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    mergeColumnConfigFromPayload(idx, {
+                        mergeSourceKeys: mergeKeys,
+                        mergeTargetName: payload.mergeTargetName,
+                        mergeSeparator: payload.mergeSeparator,
+                        mergeRemoveOriginals: payload.mergeRemoveOriginals
+                    });
+                    applyColumnMerge(idx);
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "columnSplit") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    mergeColumnConfigFromPayload(idx, {
+                        splitDelimiter: payload.splitDelimiter,
+                        splitTargetNames: payload.splitTargetNames,
+                        splitRemoveOriginal: payload.splitRemoveOriginal
+                    });
+                    applyColumnSplit(idx);
+                    counters.applied += 1;
+                    return;
+                }
+
+                if (type === "toggleColumnOutput") {
+                    const idx = resolveColumnIndexForPreset(payload);
+                    if (idx === -1) {
+                        counters.skipped += 1;
+                        return;
+                    }
+
+                    const columnKey = state.standardColumnKeys[idx];
+                    const targetColumn = state.columnConfigs.find(function (column) {
+                        return column.key === columnKey;
+                    });
+
+                    if (targetColumn && typeof payload.enabled === "boolean") {
+                        targetColumn.enabled = payload.enabled;
+                        counters.applied += 1;
+                    } else {
+                        counters.skipped += 1;
+                    }
+
+                    return;
+                }
+
+                if (type === "toggleRowOutput") {
+                    const rowKey = payload.rowKey;
+                    const rowConfig = state.rowConfigs.find(function (rc) {
+                        return rc.key === rowKey;
+                    });
+
+                    if (rowConfig && typeof payload.enabled === "boolean") {
+                        rowConfig.enabled = payload.enabled;
+                        counters.applied += 1;
+                    } else {
+                        counters.skipped += 1;
+                    }
+
+                    return;
+                }
+
+                counters.skipped += 1;
+            }
+
+            function openPresetModal() {
+                state.presetSaveError = "";
+                state.presetDraftName = buildSuggestedPresetName();
+                state.presetModalOpen = true;
+                nextTick(function () {
+                    const el = document.getElementById("presetSaveModal");
+                    if (el && window.bootstrap && window.bootstrap.Modal) {
+                        const modal = window.bootstrap.Modal.getOrCreateInstance(el);
+                        modal.show();
+                    }
+                });
+            }
+
+            function closePresetModal() {
+                const el = document.getElementById("presetSaveModal");
+                if (el && window.bootstrap && window.bootstrap.Modal) {
+                    const modal = window.bootstrap.Modal.getInstance(el);
+                    if (modal) {
+                        modal.hide();
+                    }
+                }
+
+                state.presetModalOpen = false;
+            }
+
+            function savePresetFromModal() {
+                const name = String(state.presetDraftName || "").trim();
+                if (!name) {
+                    state.presetSaveError = "Informe um nome para o preset.";
+                    return;
+                }
+
+                const duplicate = state.presets.some(function (p) {
+                    return p.name === name;
+                });
+
+                if (duplicate) {
+                    state.presetSaveError = "Ja existe um preset com este nome.";
+                    return;
+                }
+
+                const preset = {
+                    id: "preset_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9),
+                    name: name,
+                    createdAt: new Date().toISOString(),
+                    sidebarSnapshot: JSON.parse(JSON.stringify(serializeSidebarForPreset())),
+                    actions: state.previewActionLog.map(function (entry) {
+                        return {
+                            type: entry.type,
+                            summary: entry.summary,
+                            payload: JSON.parse(JSON.stringify(entry.payload))
+                        };
+                    })
+                };
+
+                state.presets.push(preset);
+                state.selectedPresetId = preset.id;
+                persistPresets();
+                state.presetSaveError = "";
+                closePresetModal();
+                pushToast("Preset \"" + name + "\" guardado.", "success");
+            }
+
+            async function executeSelectedPreset() {
+                if (state.presetRunning) {
+                    return;
+                }
+
+                if (!state.input.trim()) {
+                    pushToast("Cole ou escreva dados no Input antes de executar o preset.", "warning");
+                    return;
+                }
+
+                if (inputFormatError.value) {
+                    pushToast("Corrija o erro de formato do input antes de executar o preset.", "warning");
+                    return;
+                }
+
+                if (!state.standardHeaders.length && !state.standardRows.length) {
+                    pushToast("Nao ha dados no preview para aplicar o preset.", "warning");
+                    return;
+                }
+
+                const preset = state.presets.find(function (p) {
+                    return p.id === state.selectedPresetId;
+                });
+
+                if (!preset) {
+                    pushToast("Seleccione um preset.", "warning");
+                    return;
+                }
+
+                state.presetRunning = true;
+                suppressPresetActionLog += 1;
+
+                const counters = { applied: 0, skipped: 0 };
+
+                try {
+                    applySidebarSnapshot(preset.sidebarSnapshot);
+                    await nextTick();
+
+                    (preset.actions || []).forEach(function (action) {
+                        dispatchPresetAction(action, counters);
+                    });
+
+                    await nextTick();
+
+                    let msg;
+                    if (!(preset.actions && preset.actions.length)) {
+                        msg = "Preset \"" + preset.name + "\": apenas configuracoes do sidebar foram aplicadas.";
+                    } else {
+                        msg = "Preset \"" + preset.name + "\" concluido: " + counters.applied + " acao(oes) aplicada(s).";
+                        if (counters.skipped > 0) {
+                            msg += " " + counters.skipped + " acao(oes) ignorada(s) (coluna/linha nao encontrada).";
+                        }
+                    }
+
+                    pushToast(msg, "success");
+                } catch (error) {
+                    pushToast("Erro ao executar preset: " + (error && error.message ? error.message : "desconhecido"), "danger");
+                } finally {
+                    suppressPresetActionLog -= 1;
+                    state.presetRunning = false;
+                }
+            }
+
+            function deleteSelectedPreset() {
+                const id = state.selectedPresetId;
+                if (!id) {
+                    return;
+                }
+
+                const idx = state.presets.findIndex(function (p) {
+                    return p.id === id;
+                });
+
+                if (idx === -1) {
+                    return;
+                }
+
+                const name = state.presets[idx].name;
+                state.presets.splice(idx, 1);
+                state.selectedPresetId = state.presets[0] ? state.presets[0].id : "";
+                persistPresets();
+                pushToast("Preset \"" + name + "\" removido.", "info");
+            }
+
+            const canExecutePreset = computed(function () {
+                return Boolean(
+                    state.selectedPresetId
+                    && state.input.trim()
+                    && !inputFormatError.value
+                    && (state.standardHeaders.length || state.standardRows.length)
+                );
+            });
+
             function syncColumnConfigOrderWithStandard() {
                 const configByKey = state.columnConfigs.reduce(function (accumulator, column) {
                     accumulator[column.key] = column;
@@ -1617,6 +2134,10 @@
 
                 if (targetConfig) {
                     targetConfig.enabled = !targetConfig.enabled;
+                    logPreviewAction("toggleRowOutput", (targetConfig.enabled ? "Exibir" : "Ocultar") + " linha no output", {
+                        rowKey: rowKey,
+                        enabled: targetConfig.enabled
+                    });
                 }
             }
 
@@ -1733,6 +2254,11 @@
 
                 if (targetColumn) {
                     targetColumn.enabled = !targetColumn.enabled;
+                    logPreviewAction("toggleColumnOutput", (targetColumn.enabled ? "Exibir" : "Ocultar") + " coluna no output: " + (state.standardHeaders[columnIndex] || columnKey), {
+                        columnKey: columnKey,
+                        columnHeader: state.standardHeaders[columnIndex] || "",
+                        enabled: targetColumn.enabled
+                    });
                 }
             }
 
@@ -1843,6 +2369,8 @@
                     })
                     .filter(Boolean);
                 const sourceHeader = state.standardHeaders[columnIndex] || "Coluna";
+                const splitMenuColumnKey = state.standardColumnKeys[columnIndex];
+                const splitMenuColumnHeader = state.standardHeaders[columnIndex] || "";
                 const insertedKeys = [];
 
                 for (let partIndex = 0; partIndex < partsCount; partIndex += 1) {
@@ -1861,6 +2389,13 @@
                 const focusKey = insertedKeys[0] || "";
                 state.pendingFocusColumnKey = focusKey;
                 focusPreviewHeaderByColumnKey(focusKey);
+                logPreviewAction("columnSplit", "Dividir coluna \"" + splitMenuColumnHeader + "\"", {
+                    menuColumnKey: splitMenuColumnKey,
+                    menuColumnHeader: splitMenuColumnHeader,
+                    splitDelimiter: column.splitDelimiter,
+                    splitTargetNames: column.splitTargetNames,
+                    splitRemoveOriginal: column.splitRemoveOriginal
+                });
                 pushToast("Coluna dividida com sucesso.", "success");
             }
 
@@ -1901,6 +2436,23 @@
                     }).join(separator);
                 });
 
+                const menuColumnKeySnapshot = state.standardColumnKeys[columnIndex];
+                const menuColumnHeaderSnapshot = state.standardHeaders[columnIndex] || "";
+                const mergeSourceHeadersSnapshot = mergeSourceKeys.map(function (key) {
+                    const keyIndex = state.standardColumnKeys.indexOf(key);
+                    return keyIndex !== -1 ? state.standardHeaders[keyIndex] : "";
+                }).filter(Boolean);
+
+                logPreviewAction("columnMerge", "Mesclar colunas", {
+                    menuColumnKey: menuColumnKeySnapshot,
+                    menuColumnHeader: menuColumnHeaderSnapshot,
+                    mergeSourceKeys: mergeSourceKeys.slice(),
+                    mergeSourceHeaders: mergeSourceHeadersSnapshot,
+                    mergeTargetName: targetName,
+                    mergeSeparator: column.mergeSeparator,
+                    mergeRemoveOriginals: column.mergeRemoveOriginals
+                });
+
                 const insertIndex = Math.max.apply(null, mergeIndexes) + 1;
                 const mergedKey = insertStandardColumnAt(insertIndex, targetName, mergedValues);
 
@@ -1937,6 +2489,11 @@
                     return nextHeader;
                 });
 
+                logPreviewAction("bulkHeaderRename", "Renomeacao em massa de cabecalhos", {
+                    mode: state.bulkHeaderRenameMode,
+                    prefix: state.bulkHeaderRenamePrefix,
+                    suffix: state.bulkHeaderRenameSuffix
+                });
                 pushToast("Renomeacao em massa aplicada nas colunas.", "success");
             }
 
@@ -1955,6 +2512,7 @@
                     return nextHeader;
                 });
 
+                logPreviewAction("dedupeHeaders", "Corrigir cabecalhos duplicados", {});
                 pushToast("Colunas duplicadas foram ajustadas.", "success");
             }
 
@@ -2070,6 +2628,15 @@
                         updateStandardCell(rowIndex, columnIndex, String(start + (step * sequenceIndex)));
                     });
 
+                    logPreviewAction("bulkFill", "Preenchimento em massa (sequencia) na coluna \"" + (state.standardHeaders[columnIndex] || "") + "\"", {
+                        columnKey: columnKey,
+                        columnHeader: state.standardHeaders[columnIndex] || "",
+                        bulkFillMode: column.bulkFillMode,
+                        bulkFillValue: column.bulkFillValue,
+                        bulkFillAuxValue: column.bulkFillAuxValue,
+                        bulkFillSequenceStart: column.bulkFillSequenceStart,
+                        bulkFillSequenceStep: column.bulkFillSequenceStep
+                    });
                     pushToast("Sequencia numerica aplicada na coluna.", "success");
                     return;
                 }
@@ -2115,6 +2682,15 @@
                     updateStandardCell(rowIndex, columnIndex, nextValue);
                 });
 
+                logPreviewAction("bulkFill", "Preenchimento em massa na coluna \"" + (state.standardHeaders[columnIndex] || "") + "\"", {
+                    columnKey: columnKey,
+                    columnHeader: state.standardHeaders[columnIndex] || "",
+                    bulkFillMode: column.bulkFillMode,
+                    bulkFillValue: column.bulkFillValue,
+                    bulkFillAuxValue: column.bulkFillAuxValue,
+                    bulkFillSequenceStart: column.bulkFillSequenceStart,
+                    bulkFillSequenceStep: column.bulkFillSequenceStep
+                });
                 pushToast("Preenchimento em massa aplicado na coluna.", "success");
             }
 
@@ -2166,6 +2742,16 @@
                     return;
                 }
 
+                logPreviewAction("localeNormalize", "Normalizacao por locale na coluna \"" + (state.standardHeaders[columnIndex] || "") + "\"", {
+                    columnKey: state.standardColumnKeys[columnIndex],
+                    columnHeader: state.standardHeaders[columnIndex] || "",
+                    localeNormalizeMode: column.localeNormalizeMode,
+                    localeNumberInput: column.localeNumberInput,
+                    localeNumberOutput: column.localeNumberOutput,
+                    localeDateInput: column.localeDateInput,
+                    localeDateOutput: column.localeDateOutput,
+                    localeDateOutputManual: column.localeDateOutputManual
+                });
                 pushToast(
                     "Normalizacao aplicada: " + changedCount + " valor(es) alterado(s)" + (skippedCount ? ", " + skippedCount + " ignorado(s)." : "."),
                     "success"
@@ -2406,9 +2992,24 @@
                 state._onWindowKeyDown = onKeyDown;
                 state._onWindowClick = onWindowClick;
                 state._onViewportChange = onViewportChange;
+
+                const presetModalEl = document.getElementById("presetSaveModal");
+                if (presetModalEl) {
+                    function onPresetModalHidden() {
+                        state.presetModalOpen = false;
+                    }
+
+                    presetModalEl.addEventListener("hidden.bs.modal", onPresetModalHidden);
+                    state._onPresetModalHidden = onPresetModalHidden;
+                    state._presetModalEl = presetModalEl;
+                }
             });
 
             onBeforeUnmount(function () {
+                if (state._presetModalEl && state._onPresetModalHidden) {
+                    state._presetModalEl.removeEventListener("hidden.bs.modal", state._onPresetModalHidden);
+                }
+
                 if (state._onWindowKeyDown) {
                     window.removeEventListener("keydown", state._onWindowKeyDown);
                 }
@@ -2489,7 +3090,14 @@
                 copyOutput,
                 downloadOutput,
                 goToPreviewPage,
-                dismissToast
+                dismissToast,
+                presetSidebarSummaryLines,
+                openPresetModal,
+                closePresetModal,
+                savePresetFromModal,
+                executeSelectedPreset,
+                deleteSelectedPreset,
+                canExecutePreset
             };
         },
         template: `
@@ -2695,6 +3303,42 @@
                                             :class="inputFormatError ? 'error' : statusMessage.tone"
                                         >
                                             {{ inputFormatError || statusMessage.text }}
+                                        </div>
+                                        <div class="preset-toolbar d-flex flex-wrap align-items-center gap-2 mb-3">
+                                            <label class="form-label small mb-0 text-secondary text-nowrap" for="preset-select">Preset</label>
+                                            <select
+                                                id="preset-select"
+                                                class="form-select form-select-sm preset-select"
+                                                v-model="state.selectedPresetId"
+                                                :disabled="state.presetRunning"
+                                            >
+                                                <option value="">— Nenhum —</option>
+                                                <option v-for="p in state.presets" :key="p.id" :value="p.id">{{ p.name }}</option>
+                                            </select>
+                                            <button
+                                                class="btn btn-sm btn-outline-primary"
+                                                type="button"
+                                                @click="openPresetModal"
+                                                :disabled="state.presetRunning"
+                                            >
+                                                Novo preset
+                                            </button>
+                                            <button
+                                                class="btn btn-sm btn-primary"
+                                                type="button"
+                                                @click="executeSelectedPreset"
+                                                :disabled="!canExecutePreset || state.presetRunning"
+                                            >
+                                                Executar preset
+                                            </button>
+                                            <button
+                                                class="btn btn-sm btn-outline-danger"
+                                                type="button"
+                                                @click="deleteSelectedPreset"
+                                                :disabled="!state.selectedPresetId || state.presetRunning"
+                                            >
+                                                Remover
+                                            </button>
                                         </div>
                                         <textarea
                                             class="form-control editor-textarea"
@@ -3213,6 +3857,48 @@
                                         >
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    class="modal fade"
+                    id="presetSaveModal"
+                    tabindex="-1"
+                    aria-labelledby="presetSaveModalLabel"
+                    aria-hidden="true"
+                >
+                    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="presetSaveModalLabel">Guardar preset</h5>
+                                <button type="button" class="btn-close" aria-label="Fechar" @click="closePresetModal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div v-if="state.presetSaveError" class="alert alert-danger py-2 small mb-3" role="alert">
+                                    {{ state.presetSaveError }}
+                                </div>
+                                <label class="form-label" for="preset-draft-name">Nome</label>
+                                <input
+                                    id="preset-draft-name"
+                                    class="form-control"
+                                    v-model="state.presetDraftName"
+                                    autocomplete="off"
+                                >
+                                <h6 class="mt-4 mb-2">Configuracoes (sidebar)</h6>
+                                <ul class="small mb-0 preset-sidebar-summary">
+                                    <li v-for="(line, idx) in presetSidebarSummaryLines()" :key="'sb-' + idx">{{ line }}</li>
+                                </ul>
+                                <h6 class="mt-4 mb-2">Historico do preview</h6>
+                                <ul v-if="state.previewActionLog.length" class="small mb-0 preset-action-log">
+                                    <li v-for="e in state.previewActionLog" :key="e.id">{{ e.summary }}</li>
+                                </ul>
+                                <p v-else class="small text-secondary mb-0">Nenhuma operacao gravada desde o ultimo input.</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-outline-secondary" @click="closePresetModal">Cancelar</button>
+                                <button type="button" class="btn btn-primary" @click="savePresetFromModal">Guardar</button>
                             </div>
                         </div>
                     </div>
