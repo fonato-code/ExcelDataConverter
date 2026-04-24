@@ -138,8 +138,7 @@
                 previewSectionCollapsed: true,
                 outputSectionCollapsed: true,
                 copyFeedback: defaultState.copyFeedback,
-                toasts: defaultState.toasts,
-                lastAutoCopiedOutput: defaultState.lastAutoCopiedOutput
+                toasts: defaultState.toasts
             });
         } catch (_error) {
             return defaultState;
@@ -168,18 +167,18 @@
         return extensionMap[format] || "txt";
     }
 
-            function cloneRows(rows) {
-                return rows.map(function (row) {
-                    return row.slice();
-                });
-            }
+    function cloneRows(rows) {
+        return rows.map(function (row) {
+            return row.slice();
+        });
+    }
 
-            function findFocusableElement(selector) {
-                return document.querySelector(selector);
-            }
+    function findFocusableElement(selector) {
+        return document.querySelector(selector);
+    }
 
-            createApp({
-                setup() {
+    createApp({
+        setup() {
             let standardColumnKeySeed = 0;
             let standardRowKeySeed = 0;
             let draggedPreviewRowIndex = -1;
@@ -645,7 +644,6 @@
                 sqlAddTransaction: false,
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
-                autoCopyOutput: false,
                 standardHeaders: [],
                 standardRows: [],
                 standardColumnKeys: [],
@@ -679,8 +677,7 @@
                 pendingFocusColumnKey: "",
                 pendingFocusRowKey: "",
                 copyFeedback: "",
-                toasts: [],
-                lastAutoCopiedOutput: ""
+                toasts: []
             };
 
             const state = reactive(loadPreferences(defaultState));
@@ -709,7 +706,6 @@
                     sqlAddTransaction: state.sqlAddTransaction,
                     sqlAddTruncate: state.sqlAddTruncate,
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
-                    autoCopyOutput: state.autoCopyOutput,
                     inputSectionCollapsed: state.inputSectionCollapsed,
                     previewSectionCollapsed: state.previewSectionCollapsed,
                     outputSectionCollapsed: state.outputSectionCollapsed,
@@ -843,21 +839,6 @@
                 });
             });
 
-            const previewMeta = computed(function () {
-                const rowCount = standardObject.value.dataRows.length;
-                const columnCount = standardObject.value.headers.length;
-
-                if (!rowCount && !columnCount) {
-                    return "Sem dados carregados.";
-                }
-
-                if (rowCount > previewRows.value.length) {
-                    return "Exibindo " + previewRows.value.length + " de " + rowCount + " linhas e " + columnCount + " colunas.";
-                }
-
-                return rowCount + " linhas e " + columnCount + " colunas.";
-            });
-
             const filteredPreviewRows = computed(function () {
                 const search = state.previewSearch.trim().toLowerCase();
                 let rows = availableRows.value;
@@ -969,6 +950,35 @@
 
                     return 0;
                 });
+            });
+
+            const previewMeta = computed(function () {
+                const totalRows = standardObject.value.dataRows.length;
+                const columnCount = standardObject.value.headers.length;
+                const filteredCount = filteredPreviewRows.value.length;
+                const cellEstimate = totalRows * Math.max(columnCount, 1);
+                const scaleHint = totalRows > 8000 || cellEstimate > 200000
+                    ? " Tabela grande: a interface pode ficar lenta."
+                    : "";
+
+                if (!totalRows && !columnCount) {
+                    return "Sem dados carregados.";
+                }
+
+                const hasColumnFilter = state.columnConfigs.some(function (column) {
+                    return Boolean(column.filterOperator);
+                });
+                const hasActiveViewFilter = filteredCount < totalRows
+                    || state.previewSearch.trim() !== ""
+                    || hasColumnFilter;
+
+                if (hasActiveViewFilter) {
+                    return filteredCount + " de " + totalRows + " linhas no preview; " + columnCount
+                        + " colunas. O export usa todas as linhas ativas (filtros de vista nao limitam o ficheiro)."
+                        + scaleHint;
+                }
+
+                return totalRows + " linhas e " + columnCount + " colunas." + scaleHint;
             });
 
             const previewPageCount = computed(function () {
@@ -1190,6 +1200,33 @@
                 });
             });
 
+            const selectedRowsForExport = computed(function () {
+                const rows = selectedRows.value.slice();
+                if (state.previewSortDirection === "none" || !state.previewSortColumnKey) {
+                    return rows;
+                }
+
+                const sortColumnIndex = state.standardColumnKeys.indexOf(state.previewSortColumnKey);
+                if (sortColumnIndex === -1) {
+                    return rows;
+                }
+
+                return rows.sort(function (left, right) {
+                    const leftValue = String(left.row[sortColumnIndex] === undefined || left.row[sortColumnIndex] === null ? "" : left.row[sortColumnIndex]).toLowerCase();
+                    const rightValue = String(right.row[sortColumnIndex] === undefined || right.row[sortColumnIndex] === null ? "" : right.row[sortColumnIndex]).toLowerCase();
+
+                    if (leftValue < rightValue) {
+                        return state.previewSortDirection === "asc" ? -1 : 1;
+                    }
+
+                    if (leftValue > rightValue) {
+                        return state.previewSortDirection === "asc" ? 1 : -1;
+                    }
+
+                    return 0;
+                });
+            });
+
             const orderedHeaders = computed(function () {
                 return selectedColumns.value.map(function (column) {
                     return column.outputName || column.header;
@@ -1210,7 +1247,7 @@
             });
 
             const orderedRows = computed(function () {
-                return selectedRows.value.map(function (rowItem) {
+                return selectedRowsForExport.value.map(function (rowItem) {
                     const row = rowItem.row;
                     return selectedColumns.value.map(function (column) {
                         return column.sourceIndex < row.length ? row[column.sourceIndex] : "";
@@ -1285,21 +1322,21 @@
                 return [];
             });
 
-            const output = computed(function () {
+            const outputResult = computed(function () {
                 if (!state.input.trim()) {
-                    return "";
+                    return { text: "", error: "" };
                 }
 
                 if (inputFormatError.value) {
-                    return "";
+                    return { text: "", error: "" };
+                }
+
+                if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
+                    return { text: "", error: "" };
                 }
 
                 try {
-                    if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
-                        return "";
-                    }
-
-                    return buildOutput(
+                    const text = buildOutput(
                         state.outputFormat,
                         orderedHeaders.value,
                         orderedRows.value,
@@ -1315,17 +1352,11 @@
                             xmlRowTagName: state.xmlRowTagName
                         }
                     );
+                    return { text: text, error: "" };
                 } catch (error) {
-                    return "Erro ao converter: " + error.message;
+                    const message = error && error.message ? error.message : "Erro desconhecido";
+                    return { text: "", error: message };
                 }
-            });
-
-            const visibleOutput = computed(function () {
-                if (state.autoCopyOutput) {
-                    return "";
-                }
-
-                return output.value;
             });
 
             async function writeToClipboard(text) {
@@ -1338,12 +1369,7 @@
                 try {
                     await navigator.clipboard.writeText(text);
                     state.copyFeedback = "Copiado";
-                    pushToast(
-                        state.autoCopyOutput
-                            ? "Conversao concluida e copiada para a area de transferencia."
-                            : "Resultado copiado para a area de transferencia.",
-                        "success"
-                    );
+                    pushToast("Resultado copiado para a area de transferencia.", "success");
                 } catch (_error) {
                     state.copyFeedback = "Falha ao copiar";
                     pushToast("Falha ao copiar para a area de transferencia.", "danger");
@@ -1355,7 +1381,7 @@
             }
 
             function downloadOutput() {
-                const content = output.value;
+                const content = outputResult.value.text;
                 if (!content) {
                     pushToast("Nao ha conteudo para baixar.", "warning");
                     return;
@@ -1376,35 +1402,11 @@
             }
 
             watch(function () {
-                return {
-                    autoCopyOutput: state.autoCopyOutput,
-                    output: output.value
-                };
-            }, function (current) {
-                if (!current.autoCopyOutput) {
-                    state.lastAutoCopiedOutput = "";
-                    return;
+                return outputResult.value.error;
+            }, function (message, previousMessage) {
+                if (message && message !== previousMessage) {
+                    pushToast("Erro ao converter: " + message, "danger");
                 }
-
-                if (current.output && current.output !== state.lastAutoCopiedOutput) {
-                    state.lastAutoCopiedOutput = current.output;
-                    writeToClipboard(current.output);
-                }
-            });
-
-            watch(function () {
-                return state.autoCopyOutput;
-            }, function (enabled, previousEnabled) {
-                if (enabled === previousEnabled) {
-                    return;
-                }
-
-                pushToast(
-                    enabled
-                        ? "Auto copia ativada. Novas conversoes serao enviadas direto para a area de transferencia."
-                        : "Auto copia desativada. O resultado volta a ser exibido no textarea.",
-                    "info"
-                );
             });
 
             watch(function () {
@@ -1885,6 +1887,10 @@
                     return index !== -1;
                 });
 
+                mergeIndexes.sort(function (left, right) {
+                    return left - right;
+                });
+
                 const separator = column.mergeSeparator === undefined ? " " : column.mergeSeparator;
                 const targetName = String(column.mergeTargetName || state.standardHeaders[columnIndex] || "Coluna mesclada").trim() || "Coluna mesclada";
                 const mergedValues = state.standardRows.map(function (row) {
@@ -2326,7 +2332,7 @@
             }
 
             function copyOutput() {
-                writeToClipboard(output.value);
+                writeToClipboard(outputResult.value.text);
             }
 
             function goToPreviewPage(page) {
@@ -2428,8 +2434,7 @@
                 previewRangeLabel,
                 duplicateHeaders,
                 duplicateHeaderMessage,
-                output,
-                visibleOutput,
+                outputResult,
                 isXmlOutput,
                 isSqlOutput,
                 showDefaultInputConfig,
@@ -2493,7 +2498,7 @@
                     <div class="d-flex align-items-center gap-4">
                         <div class="topbar-brand">
                             <i class="fas fa-table" aria-hidden="true"></i>
-                            <span>ExcelConverter</span>
+                            <span>Data Converter</span>
                         </div>
                         <div class="topbar-nav">
                             <a class="topbar-link is-active" href="index.html">Conversor</a>
@@ -2666,7 +2671,7 @@
                                 <div class="panel-card input-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
-                                            <div>
+                                            <div @click="toggleMainAccordion('input')">
                                                 <div class="editor-label mb-1">Input</div>
                                                 <h3 class="h5 mb-0">Texto de origem</h3>
                                             </div>
@@ -2708,7 +2713,7 @@
                                 <div class="panel-card preview-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">
-                                            <div>
+                                            <div @click="toggleMainAccordion('preview')">
                                                 <div class="editor-label mb-1">Preview</div>
                                                 <h3 class="h5 mb-0">Objeto padrao</h3>
                                             </div>
@@ -2756,6 +2761,9 @@
                                                     <i class="fas fa-plus" aria-hidden="true"></i>
                                                 </button>
                                             </div>
+                                        </div>
+                                        <div v-if="standardObject.headers.length" class="small text-secondary mb-2 px-1">
+                                            Filtros de coluna e pesquisa afectam so a vista. O export usa todas as linhas activas no output, na mesma ordem do preview (incluindo ordenacao por coluna).
                                         </div>
 
                                         <div v-if="standardObject.headers.length" class="preview-table-wrap">
@@ -2881,7 +2889,7 @@
                                 <div class="panel-card output-panel h-100">
                                     <div class="card-body p-4">
                                         <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">
-                                            <div class="d-flex align-items-center gap-2">
+                                            <div class="d-flex align-items-center gap-2" @click="toggleMainAccordion('output')">
                                                 <div>
                                                     <div class="editor-label mb-1">Output</div>
                                                     <h3 class="h5 mb-0">Resultado convertido</h3>
@@ -2904,15 +2912,6 @@
                                                     <button class="btn btn-outline-primary" type="button" @click="downloadOutput" title="Baixar resultado">
                                                         <i class="fas fa-download" aria-hidden="true"></i>
                                                     </button>
-                                                    <button
-                                                        class="btn"
-                                                        :class="state.autoCopyOutput ? 'btn-success' : 'btn-outline-secondary'"
-                                                        type="button"
-                                                        @click="state.autoCopyOutput = !state.autoCopyOutput"
-                                                        :title="state.autoCopyOutput ? 'Desativar auto copia' : 'Ativar auto copia'"
-                                                    >
-                                                        <i :class="state.autoCopyOutput ? 'fas fa-clipboard-check' : 'fas fa-clipboard'" aria-hidden="true"></i>
-                                                    </button>
                                                 </div>
                                                 
                                                 <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
@@ -2926,12 +2925,15 @@
                                             </div>
                                         </div>
                                         <div v-if="!state.outputSectionCollapsed">
+                                        <div v-if="outputResult.error" class="alert alert-danger py-2 px-3 mb-2 small" role="alert">
+                                            Erro ao converter: {{ outputResult.error }}
+                                        </div>
                                         <textarea
                                             class="form-control editor-textarea"
-                                            :value="visibleOutput"
+                                            :value="outputResult.text"
                                             readonly
                                             spellcheck="false"
-                                            :placeholder="state.autoCopyOutput ? 'Auto copiar ativo. O resultado sera enviado direto para a area de transferencia.' : 'O resultado convertido sera exibido aqui'"
+                                            placeholder="O resultado convertido sera exibido aqui"
                                         ></textarea>
                                         </div>
                                     </div>
@@ -2993,6 +2995,7 @@
                             </h2>
                             <div id="pcMenuBulkFill" class="accordion-collapse collapse" aria-labelledby="pcMenuBulkFillHeading">
                                 <div class="accordion-body">
+                                    <div class="small text-secondary mb-2">Aplica nas linhas visiveis no preview (filtros, pesquisa e ordenacao activos).</div>
                                     <div class="preview-column-menu-group">
                                         <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().bulkFillMode">
                                             <option value="set">Definir valor</option>
@@ -3106,6 +3109,7 @@
                             </h2>
                             <div id="pcMenuLocale" class="accordion-collapse collapse" aria-labelledby="pcMenuLocaleHeading">
                                 <div class="accordion-body">
+                                    <div class="small text-secondary mb-2">Aplica nas linhas visiveis no preview (filtros, pesquisa e ordenacao activos).</div>
                                     <div class="preview-column-menu-group">
                                         <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().localeNormalizeMode">
                                             <option value="number">Numeros</option>
@@ -3178,6 +3182,7 @@
                             </h2>
                             <div id="pcMenuFilters" class="accordion-collapse collapse" aria-labelledby="pcMenuFiltersHeading">
                                 <div class="accordion-body">
+                                    <div class="small text-secondary mb-2">So afecta a lista do preview; nao remove linhas do export.</div>
                                     <div class="preview-column-menu-group">
                                         <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().filterOperator">
                                             <option value="">Sem filtro</option>
