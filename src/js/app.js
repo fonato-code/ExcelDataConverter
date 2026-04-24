@@ -336,16 +336,14 @@
                     return null;
                 }
 
-                const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
-                const dmyMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/);
-
-                function buildDateParts(year, month, day, hour, minute, second) {
+                function buildDateParts(year, month, day, hour, minute, second, millisecond, meta) {
                     const parsedYear = Number(year);
                     const parsedMonth = Number(month);
                     const parsedDay = Number(day);
                     const parsedHour = Number(hour || 0);
                     const parsedMinute = Number(minute || 0);
                     const parsedSecond = Number(second || 0);
+                    const parsedMillisecond = Number(millisecond || 0);
 
                     if (!parsedYear || parsedMonth < 1 || parsedMonth > 12 || parsedDay < 1 || parsedDay > 31) {
                         return null;
@@ -357,60 +355,269 @@
                         day: parsedDay,
                         hour: parsedHour,
                         minute: parsedMinute,
-                        second: parsedSecond
+                        second: parsedSecond,
+                        millisecond: parsedMillisecond,
+                        hasDate: true,
+                        hasTime: Boolean(meta && meta.hasTime),
+                        hasSeconds: Boolean(meta && meta.hasSeconds),
+                        hasMilliseconds: Boolean(meta && meta.hasMilliseconds),
+                        isUtc: Boolean(meta && meta.isUtc)
                     };
                 }
 
-                if ((format === "auto" || format === "yyyy-mm-dd" || format === "iso-datetime") && isoMatch) {
-                    return buildDateParts(isoMatch[1], isoMatch[2], isoMatch[3], isoMatch[4], isoMatch[5], isoMatch[6]);
-                }
-
-                if (dmyMatch) {
-                    if (format === "dd/mm/yyyy" || format === "dd/mm/yyyy hh:mm" || format === "auto") {
-                        return buildDateParts(dmyMatch[3], dmyMatch[2], dmyMatch[1], dmyMatch[4], dmyMatch[5], dmyMatch[6]);
+                function parseSlashDate(order) {
+                    const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?(?:\.(\d{1,3}))?)?$/);
+                    if (!match) {
+                        return null;
                     }
 
-                    if (format === "mm/dd/yyyy" || format === "mm/dd/yyyy hh:mm") {
-                        return buildDateParts(dmyMatch[3], dmyMatch[1], dmyMatch[2], dmyMatch[4], dmyMatch[5], dmyMatch[6]);
-                    }
+                    const first = match[1];
+                    const second = match[2];
+                    const year = match[3];
+                    const hour = match[4];
+                    const minute = match[5];
+                    const secondValue = match[6];
+                    const millisecond = match[7];
+
+                    return order === "dmy"
+                        ? buildDateParts(year, second, first, hour, minute, secondValue, millisecond, {
+                            hasTime: Boolean(hour),
+                            hasSeconds: Boolean(secondValue),
+                            hasMilliseconds: Boolean(millisecond)
+                        })
+                        : buildDateParts(year, first, second, hour, minute, secondValue, millisecond, {
+                            hasTime: Boolean(hour),
+                            hasSeconds: Boolean(secondValue),
+                            hasMilliseconds: Boolean(millisecond)
+                        });
                 }
 
-                return null;
+                function parseDashDate() {
+                    const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?(?:\.(\d{1,3}))?)?$/);
+                    if (!match) {
+                        return null;
+                    }
+
+                    return buildDateParts(match[1], match[2], match[3], match[4], match[5], match[6], match[7], {
+                        hasTime: Boolean(match[4]),
+                        hasSeconds: Boolean(match[6]),
+                        hasMilliseconds: Boolean(match[7])
+                    });
+                }
+
+                function parseIsoDate(expectUtc) {
+                    const regex = expectUtc
+                        ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?Z$/
+                        : /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?$/;
+                    const match = trimmed.match(regex);
+                    if (!match) {
+                        return null;
+                    }
+
+                    return buildDateParts(match[1], match[2], match[3], match[4], match[5], match[6], match[7], {
+                        hasTime: true,
+                        hasSeconds: Boolean(match[6]),
+                        hasMilliseconds: Boolean(match[7]),
+                        isUtc: expectUtc
+                    });
+                }
+
+                function parseSerialDate() {
+                    if (!/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+                        return null;
+                    }
+
+                    const serial = Number(trimmed);
+                    if (!Number.isFinite(serial)) {
+                        return null;
+                    }
+
+                    const excelBaseUtc = Date.UTC(1899, 11, 30);
+                    const milliseconds = Math.round(serial * 86400000);
+                    const date = new Date(excelBaseUtc + milliseconds);
+
+                    return buildDateParts(
+                        date.getUTCFullYear(),
+                        date.getUTCMonth() + 1,
+                        date.getUTCDate(),
+                        date.getUTCHours(),
+                        date.getUTCMinutes(),
+                        date.getUTCSeconds(),
+                        date.getUTCMilliseconds(),
+                        {
+                            hasTime: serial % 1 !== 0,
+                            hasSeconds: date.getUTCSeconds() !== 0 || date.getUTCMilliseconds() !== 0,
+                            hasMilliseconds: date.getUTCMilliseconds() !== 0
+                        }
+                    );
+                }
+
+                function parseCompactDate() {
+                    const match = trimmed.match(/^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2})(\d{1,3})?)?$/);
+                    if (!match) {
+                        return null;
+                    }
+
+                    return buildDateParts(match[1], match[2], match[3], match[4], match[5], match[6], match[7], {
+                        hasTime: Boolean(match[4]),
+                        hasSeconds: Boolean(match[6]),
+                        hasMilliseconds: Boolean(match[7])
+                    });
+                }
+
+                function parseUnixTimestamp() {
+                    if (!/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+                        return null;
+                    }
+
+                    const timestamp = Number(trimmed);
+                    if (!Number.isFinite(timestamp)) {
+                        return null;
+                    }
+
+                    const milliseconds = Math.abs(timestamp) >= 100000000000 ? timestamp : timestamp * 1000;
+                    const date = new Date(milliseconds);
+                    if (Number.isNaN(date.getTime())) {
+                        return null;
+                    }
+
+                    return buildDateParts(
+                        date.getUTCFullYear(),
+                        date.getUTCMonth() + 1,
+                        date.getUTCDate(),
+                        date.getUTCHours(),
+                        date.getUTCMinutes(),
+                        date.getUTCSeconds(),
+                        date.getUTCMilliseconds(),
+                        {
+                            hasTime: true,
+                            hasSeconds: true,
+                            hasMilliseconds: date.getUTCMilliseconds() !== 0,
+                            isUtc: true
+                        }
+                    );
+                }
+
+                const parsersByFormat = {
+                    "dd/mm/yyyy hh:mm:ss.fff": function () { return parseSlashDate("dmy"); },
+                    "mm/dd/yyyy hh:mm:ss.fff": function () { return parseSlashDate("mdy"); },
+                    "yyyy-mm-dd hh:mm:ss.fff": parseDashDate,
+                    "iso-datetime": function () { return parseIsoDate(false); },
+                    "iso-datetime-utc": function () { return parseIsoDate(true); },
+                    "serial-date": parseSerialDate,
+                    "compact-date": parseCompactDate,
+                    "unix-timestamp": parseUnixTimestamp
+                };
+
+                if (format && format !== "auto" && parsersByFormat[format]) {
+                    return parsersByFormat[format]();
+                }
+
+                const numericOnly = /^-?\d+(?:\.\d+)?$/.test(trimmed);
+                if (numericOnly) {
+                    const integerDigits = trimmed.replace(/[^0-9]/g, "").length;
+
+                    if (integerDigits >= 14) {
+                        return parseCompactDate() || parseUnixTimestamp() || parseSerialDate();
+                    }
+
+                    if (integerDigits >= 10) {
+                        return parseUnixTimestamp() || parseSerialDate();
+                    }
+
+                    return parseSerialDate() || parseUnixTimestamp();
+                }
+
+                return parseSlashDate("dmy")
+                    || parseSlashDate("mdy")
+                    || parseDashDate()
+                    || parseIsoDate(true)
+                    || parseIsoDate(false);
             }
 
-            function formatDateByFormat(parts, format) {
+            function formatDateByFormat(parts, format, manualMask) {
                 if (!parts) {
                     return "";
                 }
 
-                const yyyy = String(parts.year);
-                const mm = padDatePart(parts.month);
-                const dd = padDatePart(parts.day);
-                const hh = padDatePart(parts.hour || 0);
-                const mi = padDatePart(parts.minute || 0);
-                const ss = padDatePart(parts.second || 0);
+                const tokens = {
+                    YYYY: String(parts.year),
+                    MM: padDatePart(parts.month),
+                    DD: padDatePart(parts.day),
+                    HH: padDatePart(parts.hour || 0),
+                    mm: padDatePart(parts.minute || 0),
+                    ss: padDatePart(parts.second || 0),
+                    fff: String(parts.millisecond || 0).padStart(3, "0")
+                };
 
-                if (format === "dd/mm/yyyy") {
-                    return dd + "/" + mm + "/" + yyyy;
+                function replaceMask(mask) {
+                    return String(mask || "").replace(/YYYY|MM|DD|HH|mm|ss|fff/g, function (token) {
+                        return tokens[token];
+                    });
                 }
 
-                if (format === "mm/dd/yyyy") {
-                    return mm + "/" + dd + "/" + yyyy;
+                function formatFlexibleDate(baseMask) {
+                    if (!parts.hasTime) {
+                        return replaceMask(baseMask.split(" ")[0]);
+                    }
+
+                    if (!parts.hasSeconds) {
+                        return replaceMask(baseMask.replace(/:ss(?:\.fff)?$/, ""));
+                    }
+
+                    if (!parts.hasMilliseconds) {
+                        return replaceMask(baseMask.replace(/\.fff$/, ""));
+                    }
+
+                    return replaceMask(baseMask);
                 }
 
-                if (format === "dd/mm/yyyy hh:mm") {
-                    return dd + "/" + mm + "/" + yyyy + " " + hh + ":" + mi;
+                if (format === "manual") {
+                    return replaceMask(manualMask || "YYYY-MM-DD");
                 }
 
-                if (format === "mm/dd/yyyy hh:mm") {
-                    return mm + "/" + dd + "/" + yyyy + " " + hh + ":" + mi;
+                if (format === "dd/mm/yyyy hh:mm:ss.fff") {
+                    return formatFlexibleDate("DD/MM/YYYY HH:mm:ss.fff");
+                }
+
+                if (format === "mm/dd/yyyy hh:mm:ss.fff") {
+                    return formatFlexibleDate("MM/DD/YYYY HH:mm:ss.fff");
+                }
+
+                if (format === "yyyy-mm-dd hh:mm:ss.fff") {
+                    return formatFlexibleDate("YYYY-MM-DD HH:mm:ss.fff");
                 }
 
                 if (format === "iso-datetime") {
-                    return yyyy + "-" + mm + "-" + dd + "T" + hh + ":" + mi + ":" + ss;
+                    return parts.hasMilliseconds
+                        ? replaceMask("YYYY-MM-DDTHH:mm:ss.fff")
+                        : replaceMask("YYYY-MM-DDTHH:mm:ss");
                 }
 
-                return yyyy + "-" + mm + "-" + dd;
+                if (format === "iso-datetime-utc") {
+                    return (parts.hasMilliseconds
+                        ? replaceMask("YYYY-MM-DDTHH:mm:ss.fff")
+                        : replaceMask("YYYY-MM-DDTHH:mm:ss")) + "Z";
+                }
+
+                if (format === "serial-date") {
+                    const excelBaseUtc = Date.UTC(1899, 11, 30);
+                    const currentUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0, parts.second || 0, parts.millisecond || 0);
+                    return String((currentUtc - excelBaseUtc) / 86400000);
+                }
+
+                if (format === "compact-date") {
+                    return parts.hasTime
+                        ? replaceMask("YYYYMMDDHHmmssfff")
+                        : replaceMask("YYYYMMDD");
+                }
+
+                if (format === "unix-timestamp") {
+                    const currentUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0, parts.second || 0, parts.millisecond || 0);
+                    return String(Math.floor(currentUtc / 1000));
+                }
+
+                return formatFlexibleDate("YYYY-MM-DD HH:mm:ss.fff");
             }
 
             function escapeSelectorToken(value) {
@@ -842,7 +1049,8 @@
                             localeNumberInput: column.localeNumberInput,
                             localeNumberOutput: column.localeNumberOutput,
                             localeDateInput: column.localeDateInput,
-                            localeDateOutput: column.localeDateOutput
+                            localeDateOutput: column.localeDateOutput,
+                            localeDateOutputManual: column.localeDateOutputManual
                         };
                     });
 
@@ -879,7 +1087,8 @@
                             localeNumberInput: previous ? previous.localeNumberInput : "auto",
                             localeNumberOutput: previous ? previous.localeNumberOutput : "raw",
                             localeDateInput: previous ? previous.localeDateInput : "auto",
-                            localeDateOutput: previous ? previous.localeDateOutput : "yyyy-mm-dd"
+                            localeDateOutput: previous ? previous.localeDateOutput : "dd/mm/yyyy hh:mm:ss.fff",
+                            localeDateOutputManual: previous ? previous.localeDateOutputManual : "DD/MM/YYYY HH:mm:ss.fff"
                         };
                     });
 
@@ -911,7 +1120,8 @@
                         localeNumberInput: column.localeNumberInput || "auto",
                         localeNumberOutput: column.localeNumberOutput || "raw",
                         localeDateInput: column.localeDateInput || "auto",
-                        localeDateOutput: column.localeDateOutput || "yyyy-mm-dd"
+                        localeDateOutput: column.localeDateOutput || "dd/mm/yyyy hh:mm:ss.fff",
+                        localeDateOutputManual: column.localeDateOutputManual || "DD/MM/YYYY HH:mm:ss.fff"
                     };
                 });
             }, { immediate: true });
@@ -1594,7 +1804,8 @@
                     localeNumberInput: "auto",
                     localeNumberOutput: "raw",
                     localeDateInput: "auto",
-                    localeDateOutput: "yyyy-mm-dd"
+                    localeDateOutput: "dd/mm/yyyy hh:mm:ss.fff",
+                    localeDateOutputManual: "DD/MM/YYYY HH:mm:ss.fff"
                 };
             }
 
@@ -1940,7 +2151,7 @@
                         return;
                     }
 
-                    updateStandardCell(rowIndex, columnIndex, formatDateByFormat(parsedDate, column.localeDateOutput));
+                    updateStandardCell(rowIndex, columnIndex, formatDateByFormat(parsedDate, column.localeDateOutput, column.localeDateOutputManual));
                     changedCount += 1;
                 });
 
@@ -2913,21 +3124,32 @@
                                             <div class="small text-secondary mb-2">Padroniza datas da coluna para o formato desejado.</div>
                                             <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().localeDateInput">
                                                 <option value="auto">Entrada: Auto</option>
-                                                <option value="dd/mm/yyyy">Entrada: DD/MM/YYYY</option>
-                                                <option value="mm/dd/yyyy">Entrada: MM/DD/YYYY</option>
-                                                <option value="yyyy-mm-dd">Entrada: YYYY-MM-DD</option>
-                                                <option value="dd/mm/yyyy hh:mm">Entrada: DD/MM/YYYY HH:mm</option>
-                                                <option value="mm/dd/yyyy hh:mm">Entrada: MM/DD/YYYY HH:mm</option>
-                                                <option value="iso-datetime">Entrada: ISO DateTime</option>
+                                                <option value="dd/mm/yyyy hh:mm:ss.fff">Entrada: DD/MM/YYYY HH:mm:ss.fff</option>
+                                                <option value="mm/dd/yyyy hh:mm:ss.fff">Entrada: MM/DD/YYYY HH:mm:ss.fff</option>
+                                                <option value="yyyy-mm-dd hh:mm:ss.fff">Entrada: YYYY-MM-DD HH:mm:ss.fff</option>
+                                                <option value="iso-datetime">Entrada: ISO Datetime (YYYY-MM-DDTHH:mm:ss)</option>
+                                                <option value="iso-datetime-utc">Entrada: ISO Datetime UTC (YYYY-MM-DDTHH:mm:ssZ)</option>
+                                                <option value="serial-date">Entrada: Serial Date (01/01/1900)</option>
+                                                <option value="compact-date">Entrada: Compact Date (YYYYMMDDHHmmssfff)</option>
+                                                <option value="unix-timestamp">Entrada: Unix timestamp / Epoch time (01/01/1970)</option>
                                             </select>
                                             <select class="form-select form-select-sm mb-2" v-model="getMenuColumnConfig().localeDateOutput">
-                                                <option value="yyyy-mm-dd">Saida: YYYY-MM-DD</option>
-                                                <option value="dd/mm/yyyy">Saida: DD/MM/YYYY</option>
-                                                <option value="mm/dd/yyyy">Saida: MM/DD/YYYY</option>
-                                                <option value="dd/mm/yyyy hh:mm">Saida: DD/MM/YYYY HH:mm</option>
-                                                <option value="mm/dd/yyyy hh:mm">Saida: MM/DD/YYYY HH:mm</option>
-                                                <option value="iso-datetime">Saida: ISO DateTime</option>
+                                                <option value="dd/mm/yyyy hh:mm:ss.fff">Saida: DD/MM/YYYY HH:mm:ss.fff</option>
+                                                <option value="mm/dd/yyyy hh:mm:ss.fff">Saida: MM/DD/YYYY HH:mm:ss.fff</option>
+                                                <option value="yyyy-mm-dd hh:mm:ss.fff">Saida: YYYY-MM-DD HH:mm:ss.fff</option>
+                                                <option value="iso-datetime">Saida: ISO Datetime (YYYY-MM-DDTHH:mm:ss)</option>
+                                                <option value="iso-datetime-utc">Saida: ISO Datetime UTC (YYYY-MM-DDTHH:mm:ssZ)</option>
+                                                <option value="serial-date">Saida: Serial Date (01/01/1900)</option>
+                                                <option value="compact-date">Saida: Compact Date (YYYYMMDDHHmmssfff)</option>
+                                                <option value="unix-timestamp">Saida: Unix timestamp / Epoch time (01/01/1970)</option>
+                                                <option value="manual">Saida: Manual</option>
                                             </select>
+                                            <input
+                                                v-if="getMenuColumnConfig().localeDateOutput === 'manual'"
+                                                class="form-control form-control-sm mb-2"
+                                                v-model="getMenuColumnConfig().localeDateOutputManual"
+                                                placeholder="Mascara manual. Ex: DD/MM/YYYY HH:mm:ss.fff"
+                                            >
                                         </template>
 
                                         <button class="btn btn-sm btn-outline-primary w-100" type="button" @click="applyLocaleNormalization(getMenuColumnIndex())">Aplicar normalizacao</button>
