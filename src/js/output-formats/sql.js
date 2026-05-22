@@ -62,11 +62,24 @@
         const insertColumns = headers.map(function (header) {
             return utils.sanitizeSqlIdentifier(header);
         }).join(",");
-        const values = rows.map(function (row) {
-            return "\t(" + headers.map(function (_header, index) {
-                return formatSqlValue(index < row.length ? row[index] : "", utils, options.convertEmptyToNull);
-            }).join(",") + ")";
-        }).join(",\n");
+        const batchSize = Math.max(1, Math.floor(Number(options.sqlInsertBatchSize) || 1000));
+        const insertStatements = [];
+
+        for (let offset = 0; offset < rows.length; offset += batchSize) {
+            const chunk = rows.slice(offset, offset + batchSize);
+            const values = chunk.map(function (row) {
+                return "\t(" + headers.map(function (_header, index) {
+                    return formatSqlValue(index < row.length ? row[index] : "", utils, options.convertEmptyToNull);
+                }).join(",") + ")";
+            }).join(",\n");
+
+            insertStatements.push([
+                "INSERT INTO " + resolvedTableName,
+                "\t(" + insertColumns + ")",
+                "VALUES",
+                values + ";"
+            ].join("\n"));
+        }
 
         const statements = [
             options.addCreateTable ? [
@@ -76,10 +89,7 @@
             ].join("\n") : "",
             options.addTruncate ? "TRUNCATE TABLE " + resolvedTableName + ";" : "",
             options.addIdentityInsert ? "SET IDENTITY_INSERT " + resolvedTableName + " ON;" : "",
-            "INSERT INTO " + resolvedTableName,
-            "\t(" + insertColumns + ")",
-            "VALUES",
-            values + ";",
+            insertStatements.join("\n"),
             options.addIdentityInsert ? "SET IDENTITY_INSERT " + resolvedTableName + " OFF;" : ""
         ].filter(Boolean).join("\n");
 

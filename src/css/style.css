@@ -430,6 +430,35 @@ html {
     flex-shrink: 0;
 }
 
+.output-header-actions {
+    margin-left: auto;
+    justify-content: flex-end;
+}
+
+.output-toolbar-group {
+    width: auto;
+    flex: 0 0 auto;
+    max-width: max-content;
+}
+
+.output-toolbar-group .output-format-select {
+    width: auto;
+    min-width: 8rem;
+    max-width: 11rem;
+    flex: 0 1 auto;
+}
+
+.output-toolbar-group .output-sql-table-input {
+    width: auto;
+    min-width: 7rem;
+    max-width: 12rem;
+    flex: 0 1 auto;
+}
+
+.output-panel .output-toolbar-group .btn {
+    flex-shrink: 0;
+}
+
 .preview-skip-toggle {
     padding-left: 0.25rem;
     padding-right: 0.25rem;

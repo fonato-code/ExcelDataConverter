@@ -661,6 +661,7 @@
                 sqlAddTransaction: false,
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
+                sqlInsertBatchSize: 1000,
                 standardHeaders: [],
                 standardRows: [],
                 standardColumnKeys: [],
@@ -735,6 +736,7 @@
                     sqlAddTransaction: state.sqlAddTransaction,
                     sqlAddTruncate: state.sqlAddTruncate,
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlInsertBatchSize: state.sqlInsertBatchSize,
                     inputSectionCollapsed: state.inputSectionCollapsed,
                     previewSectionCollapsed: state.previewSectionCollapsed,
                     outputSectionCollapsed: state.outputSectionCollapsed,
@@ -1469,6 +1471,7 @@
                     addTransaction: state.sqlAddTransaction,
                     addTruncate: state.sqlAddTruncate,
                     convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlInsertBatchSize: state.sqlInsertBatchSize,
                     xmlRootTagName: state.xmlRootTagName,
                     xmlRowTagName: state.xmlRowTagName
                 };
@@ -1666,6 +1669,7 @@
                     sqlAddTransaction: state.sqlAddTransaction,
                     sqlAddTruncate: state.sqlAddTruncate,
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlInsertBatchSize: state.sqlInsertBatchSize,
                     inputSectionCollapsed: state.inputSectionCollapsed,
                     previewSectionCollapsed: state.previewSectionCollapsed,
                     outputSectionCollapsed: state.outputSectionCollapsed,
@@ -1689,7 +1693,7 @@
                     "Formato saida: " + s.outputFormat,
                     "XML root / row: " + s.xmlRootTagName + " / " + s.xmlRowTagName,
                     "SQL tabela: " + s.sqlTableName,
-                    "SQL opcoes: CREATE " + (s.sqlAddCreateTable ? "sim" : "nao") + ", IDENTITY_INSERT " + (s.sqlAddIdentityInsert ? "sim" : "nao") + ", TRANSACTION " + (s.sqlAddTransaction ? "sim" : "nao") + ", TRUNCATE " + (s.sqlAddTruncate ? "sim" : "nao") + ", vazio->NULL " + (s.sqlConvertEmptyToNull ? "sim" : "nao"),
+                    "SQL opcoes: CREATE " + (s.sqlAddCreateTable ? "sim" : "nao") + ", IDENTITY_INSERT " + (s.sqlAddIdentityInsert ? "sim" : "nao") + ", TRANSACTION " + (s.sqlAddTransaction ? "sim" : "nao") + ", TRUNCATE " + (s.sqlAddTruncate ? "sim" : "nao") + ", vazio->NULL " + (s.sqlConvertEmptyToNull ? "sim" : "nao") + ", linhas por INSERT " + s.sqlInsertBatchSize,
                     "Renomeacao em massa: " + s.bulkHeaderRenameMode + " | prefixo \"" + s.bulkHeaderRenamePrefix + "\" | sufixo \"" + s.bulkHeaderRenameSuffix + "\"",
                     "Sidebar: " + (s.sidebarOpen ? "aberta" : "fechada") + " (" + s.sidebarWidth + "px)"
                 ];
@@ -1717,6 +1721,7 @@
                     "sqlAddTransaction",
                     "sqlAddTruncate",
                     "sqlConvertEmptyToNull",
+                    "sqlInsertBatchSize",
                     "inputSectionCollapsed",
                     "previewSectionCollapsed",
                     "outputSectionCollapsed",
@@ -3520,11 +3525,6 @@
                                             <input id="xml-row-tag" class="form-control form-control-sm" v-model="state.xmlRowTagName" placeholder="row">
                                         </div>
 
-                                        <div v-if="isSqlOutput">
-                                            <label for="sql-table-name" class="form-label fw-semibold">Tabela</label>
-                                            <input id="sql-table-name" class="form-control form-control-sm" v-model="state.sqlTableName" placeholder="ExcelConverter">
-                                        </div>
-
                                         <div v-if="isSqlOutput" class="form-check form-switch mt-3">
                                             <input id="sql-create-table" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlAddCreateTable">
                                             <label class="form-check-label fw-semibold" for="sql-create-table">Adicionar CREATE TABLE</label>
@@ -3548,6 +3548,20 @@
                                         <div v-if="isSqlOutput" class="form-check form-switch mt-3">
                                             <input id="sql-empty-null" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlConvertEmptyToNull">
                                             <label class="form-check-label fw-semibold" for="sql-empty-null">Converter valores vazios em NULL</label>
+                                        </div>
+
+                                        <div v-if="isSqlOutput" class="mt-3">
+                                            <label for="sql-insert-batch-size" class="form-label fw-semibold">Linhas por INSERT (VALUES)</label>
+                                            <input
+                                                id="sql-insert-batch-size"
+                                                class="form-control form-control-sm"
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                v-model.number="state.sqlInsertBatchSize"
+                                                placeholder="1000"
+                                            >
+                                            <div class="small text-secondary mt-1">Cada comando INSERT tera no maximo este numero de linhas (padrao 1000).</div>
                                         </div>
                                     </div>
                                 </div>
@@ -3850,9 +3864,20 @@
                                                 </div>
                                                 
                                             </div>
-                                            <div class="d-flex align-items-center gap-2 col-12 col-sm-6 col-lg-7 col-xxl-6 px-0">
-                                                <div class="input-group input-group-sm">
-                                                    <select class="form-select" v-model="state.outputFormat">
+                                            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end flex-grow-1 output-header-actions">
+                                                <div class="input-group input-group-sm output-toolbar-group">
+                                                    <template v-if="isSqlOutput">
+                                                        <label class="input-group-text mb-0 small d-none d-md-inline" for="output-sql-table-name">Tabela</label>
+                                                        <input
+                                                            id="output-sql-table-name"
+                                                            class="form-control output-sql-table-input"
+                                                            v-model="state.sqlTableName"
+                                                            placeholder="ExcelConverter"
+                                                            title="Nome da tabela SQL"
+                                                        >
+                                                    </template>
+                                                    <label class="input-group-text mb-0 small d-none d-lg-inline" for="output-format-select">Formato</label>
+                                                    <select id="output-format-select" class="form-select output-format-select" v-model="state.outputFormat">
                                                         <option v-for="format in outputFormats" :key="format.value" :value="format.value">
                                                             {{ format.label }}
                                                         </option>
@@ -3867,15 +3892,12 @@
                                                         <i class="fas fa-download" aria-hidden="true"></i>
                                                     </button>
                                                 </div>
-                                                
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button"  @click="toggleSidebar" >
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSidebar" title="Configuracoes">
                                                     <i class="fas fa-cog" aria-hidden="true"></i>
                                                 </button>
-
-                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('output')">
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('output')" :title="state.outputSectionCollapsed ? 'Expandir secao' : 'Colapsar secao'">
                                                     <i :class="state.outputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
                                                 </button>
-
                                             </div>
                                         </div>
                                         <div v-if="!state.outputSectionCollapsed">
