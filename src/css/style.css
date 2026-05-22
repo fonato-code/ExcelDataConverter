@@ -422,6 +422,23 @@ html {
     flex-shrink: 0;
 }
 
+.input-toolbar-group .form-select {
+    min-width: 8rem;
+}
+
+.input-panel .input-toolbar-group .btn {
+    flex-shrink: 0;
+}
+
+.preview-skip-toggle {
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+}
+
+.preview-skip-toggle .form-check-label {
+    color: var(--ec-muted);
+}
+
 .preset-sidebar-summary,
 .preset-action-log {
     max-height: 12rem;

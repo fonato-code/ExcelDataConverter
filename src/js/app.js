@@ -701,7 +701,8 @@
                 presetModalOpen: false,
                 presetDraftName: "",
                 presetSaveError: "",
-                presetRunning: false
+                presetRunning: false,
+                skipPreviewLoad: false
             };
 
             const state = reactive(loadPreferences(defaultState));
@@ -741,7 +742,8 @@
                     sidebarWidth: state.sidebarWidth,
                     bulkHeaderRenameMode: state.bulkHeaderRenameMode,
                     bulkHeaderRenamePrefix: state.bulkHeaderRenamePrefix,
-                    bulkHeaderRenameSuffix: state.bulkHeaderRenameSuffix
+                    bulkHeaderRenameSuffix: state.bulkHeaderRenameSuffix,
+                    skipPreviewLoad: state.skipPreviewLoad
                 };
             }, function (preferences) {
                 window.localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
@@ -826,16 +828,30 @@
                 }
             });
 
-            watch(function () {
-                return parsedInputResult.value;
-            }, function (result) {
-                const data = result.data || { headers: [], dataRows: [] };
-                state.standardHeaders = data.headers.slice();
-                state.standardRows = cloneRows(data.dataRows);
-                state.standardColumnKeys = createColumnKeys(data.headers.length);
-                state.standardRowKeys = createRowKeys(data.dataRows.length);
-                state.originalStandardHeaders = data.headers.slice();
-                state.originalStandardRows = cloneRows(data.dataRows);
+            function clearStandardCanonical() {
+                state.standardHeaders = [];
+                state.standardRows = [];
+                state.standardColumnKeys = [];
+                state.standardRowKeys = [];
+                state.originalStandardHeaders = [];
+                state.originalStandardRows = [];
+                state.originalStandardColumnKeys = [];
+                state.originalStandardRowKeys = [];
+                state.previewColumnWidths = {};
+                state.previewColumnMenuKey = "";
+                state.columnConfigs = [];
+                state.rowConfigs = [];
+                state.previewPage = 1;
+            }
+
+            function hydrateStandardFromParsedResult(data) {
+                const parsed = data || { headers: [], dataRows: [] };
+                state.standardHeaders = parsed.headers.slice();
+                state.standardRows = cloneRows(parsed.dataRows);
+                state.standardColumnKeys = createColumnKeys(parsed.headers.length);
+                state.standardRowKeys = createRowKeys(parsed.dataRows.length);
+                state.originalStandardHeaders = parsed.headers.slice();
+                state.originalStandardRows = cloneRows(parsed.dataRows);
                 state.originalStandardColumnKeys = state.standardColumnKeys.slice();
                 state.originalStandardRowKeys = state.standardRowKeys.slice();
                 state.previewColumnWidths = {};
@@ -844,8 +860,62 @@
                 state.columnConfigs = [];
                 state.rowConfigs = [];
                 state.previewPage = 1;
+            }
+
+            function buildDirectExportPayload(parsedData) {
+                const headers = parsedData.headers || [];
+                const dataRows = parsedData.dataRows || [];
+                const columnKeys = createColumnKeys(headers.length);
+                const columns = headers.map(function (header, index) {
+                    return {
+                        key: columnKeys[index],
+                        header: header,
+                        sourceIndex: index,
+                        enabled: true,
+                        outputName: header,
+                        sqlType: "",
+                        avroType: ""
+                    };
+                });
+                const rows = dataRows.map(function (row) {
+                    return headers.map(function (_header, index) {
+                        return index < row.length ? row[index] : "";
+                    });
+                });
+
+                return {
+                    headers: headers,
+                    rows: rows,
+                    columns: columns
+                };
+            }
+
+            watch(function () {
+                return parsedInputResult.value;
+            }, function (result) {
+                const data = result.data || { headers: [], dataRows: [] };
                 state.previewActionLog = [];
+
+                if (state.skipPreviewLoad) {
+                    clearStandardCanonical();
+                    return;
+                }
+
+                hydrateStandardFromParsedResult(data);
             }, { immediate: true });
+
+            watch(function () {
+                return state.skipPreviewLoad;
+            }, function (skip, previousSkip) {
+                if (skip) {
+                    clearStandardCanonical();
+                    return;
+                }
+
+                if (previousSkip && state.input.trim() && !inputFormatError.value) {
+                    hydrateStandardFromParsedResult(parsedInputResult.value.data);
+                }
+            });
 
             const standardObject = computed(function () {
                 return {
@@ -981,7 +1051,39 @@
                 });
             });
 
+            const inputMeta = computed(function () {
+                if (inputFormatError.value) {
+                    return inputFormatError.value;
+                }
+
+                if (!state.input.trim()) {
+                    return "Sem dados";
+                }
+
+                const data = parsedInputResult.value.data || { headers: [], dataRows: [] };
+                const rowCount = data.dataRows.length;
+                const columnCount = data.headers.length;
+
+                if (!rowCount && !columnCount) {
+                    return "Sem dados carregados.";
+                }
+
+                return rowCount + " linhas · " + columnCount + " colunas";
+            });
+
             const previewMeta = computed(function () {
+                if (state.skipPreviewLoad) {
+                    const data = parsedInputResult.value.data || { headers: [], dataRows: [] };
+                    const rowCount = data.dataRows.length;
+                    const columnCount = data.headers.length;
+
+                    if (!state.input.trim() || (!rowCount && !columnCount)) {
+                        return "Modo conversao directa: preview desactivado.";
+                    }
+
+                    return "Modo conversao directa: " + rowCount + " linhas · " + columnCount + " colunas (preview desactivado).";
+                }
+
                 const totalRows = standardObject.value.dataRows.length;
                 const columnCount = standardObject.value.headers.length;
                 const filteredCount = filteredPreviewRows.value.length;
@@ -1360,26 +1462,47 @@
                     return { text: "", error: "" };
                 }
 
-                if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
-                    return { text: "", error: "" };
+                const exportOptions = {
+                    sqlTableName: state.sqlTableName,
+                    addCreateTable: state.sqlAddCreateTable,
+                    addIdentityInsert: state.sqlAddIdentityInsert,
+                    addTransaction: state.sqlAddTransaction,
+                    addTruncate: state.sqlAddTruncate,
+                    convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    xmlRootTagName: state.xmlRootTagName,
+                    xmlRowTagName: state.xmlRowTagName
+                };
+
+                let headers;
+                let rows;
+                let columns;
+
+                if (state.skipPreviewLoad) {
+                    const data = parsedInputResult.value.data || { headers: [], dataRows: [] };
+                    if (!data.headers.length && !data.dataRows.length) {
+                        return { text: "", error: "" };
+                    }
+
+                    const direct = buildDirectExportPayload(data);
+                    headers = direct.headers;
+                    rows = direct.rows;
+                    columns = direct.columns;
+                } else {
+                    if (!standardObject.value.dataRows.length && !standardObject.value.headers.length) {
+                        return { text: "", error: "" };
+                    }
+
+                    headers = orderedHeaders.value;
+                    rows = orderedRows.value;
+                    columns = orderedColumns.value;
                 }
 
                 try {
                     const text = buildOutput(
                         state.outputFormat,
-                        orderedHeaders.value,
-                        orderedRows.value,
-                        {
-                            columns: orderedColumns.value,
-                            sqlTableName: state.sqlTableName,
-                            addCreateTable: state.sqlAddCreateTable,
-                            addIdentityInsert: state.sqlAddIdentityInsert,
-                            addTransaction: state.sqlAddTransaction,
-                            addTruncate: state.sqlAddTruncate,
-                            convertEmptyToNull: state.sqlConvertEmptyToNull,
-                            xmlRootTagName: state.xmlRootTagName,
-                            xmlRowTagName: state.xmlRowTagName
-                        }
+                        headers,
+                        rows,
+                        Object.assign({ columns: columns }, exportOptions)
                     );
                     return { text: text, error: "" };
                 } catch (error) {
@@ -1934,6 +2057,11 @@
                     return;
                 }
 
+                if (state.skipPreviewLoad) {
+                    pushToast("Desactive \"Apenas converter (sem preview)\" para executar presets.", "warning");
+                    return;
+                }
+
                 if (!state.input.trim()) {
                     pushToast("Cole ou escreva dados no Input antes de executar o preset.", "warning");
                     return;
@@ -2015,7 +2143,8 @@
 
             const canExecutePreset = computed(function () {
                 return Boolean(
-                    state.selectedPresetId
+                    !state.skipPreviewLoad
+                    && state.selectedPresetId
                     && state.input.trim()
                     && !inputFormatError.value
                     && (state.standardHeaders.length || state.standardRows.length)
@@ -2987,31 +3116,81 @@
                 window.addEventListener("mouseup", onUp);
             }
 
+            async function focusAfterInputLoaded() {
+                await nextTick();
+
+                if (inputFormatError.value) {
+                    return;
+                }
+
+                const data = parsedInputResult.value.data || { headers: [], dataRows: [] };
+                if (!data.headers.length && !data.dataRows.length) {
+                    return;
+                }
+
+                state.inputSectionCollapsed = true;
+
+                if (state.skipPreviewLoad) {
+                    state.previewSectionCollapsed = true;
+                    state.outputSectionCollapsed = true;
+                    return;
+                }
+
+                state.previewSectionCollapsed = false;
+                state.outputSectionCollapsed = true;
+                await nextTick();
+                const previewSection = document.getElementById("preview-section");
+                if (previewSection) {
+                    previewSection.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start"
+                    });
+                }
+            }
+
             async function handleInputPaste() {
-                window.setTimeout(async function () {
+                window.setTimeout(function () {
+                    focusAfterInputLoaded();
+                }, 0);
+            }
+
+            async function pasteInputFromClipboard() {
+                if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
+                    pushToast("Leitura da area de transferencia nao disponivel neste browser.", "danger");
+                    return;
+                }
+
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (!text || !String(text).trim()) {
+                        pushToast("A area de transferencia esta vazia.", "warning");
+                        return;
+                    }
+
+                    state.input = String(text);
                     await nextTick();
 
                     if (inputFormatError.value) {
                         return;
                     }
 
-                    if (!state.standardHeaders.length && !state.standardRows.length) {
+                    const data = parsedInputResult.value.data || { headers: [], dataRows: [] };
+                    const rowCount = data.dataRows.length;
+                    const columnCount = data.headers.length;
+
+                    if (!rowCount && !columnCount) {
+                        pushToast("Nao foi possivel ler dados da area de transferencia.", "warning");
                         return;
                     }
 
-                    state.inputSectionCollapsed = true;
-                    state.previewSectionCollapsed = false;
-                    state.outputSectionCollapsed = true;
-
-                    await nextTick();
-                    const previewSection = document.getElementById("preview-section");
-                    if (previewSection) {
-                        previewSection.scrollIntoView({
-                            behavior: "smooth",
-                            block: "start"
-                        });
-                    }
-                }, 0);
+                    await focusAfterInputLoaded();
+                    pushToast(
+                        "Dados colados da area de transferencia: " + rowCount + " linha(s), " + columnCount + " coluna(s).",
+                        "success"
+                    );
+                } catch (_error) {
+                    pushToast("Nao foi possivel ler a area de transferencia. Verifique permissoes do browser.", "danger");
+                }
             }
 
             function toggleTheme() {
@@ -3126,6 +3305,7 @@
             return {
                 state,
                 statusMessage,
+                inputMeta,
                 inputFormatError,
                 standardObject,
                 previewRows,
@@ -3164,6 +3344,7 @@
                 logPreviewSearchAction,
                 startSidebarResize,
                 handleInputPaste,
+                pasteInputFromClipboard,
                 toggleTheme,
                 updateStandardHeader,
                 updateStandardCell,
@@ -3381,26 +3562,36 @@
                             <section id="input-section" class="col-12">
                                 <div class="panel-card input-panel h-100">
                                     <div class="card-body p-4">
-                                        <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
+                                        <div class="d-flex align-items-center justify-content-between gap-3 mb-3 flex-wrap">
                                             <div @click="toggleMainAccordion('input')">
                                                 <div class="editor-label mb-1">Input</div>
                                                 <h3 class="h5 mb-0">Texto de origem</h3>
                                             </div>
-                                            <div class="col-12 col-sm-6 col-lg-7 col-xxl-6 px-0">
-                                                <div class="input-group input-group-sm">
-                                                    <label class="input-group-text mb-0 d-none d-md-flex" for="input-format-select">Formato</label>
+                                            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end flex-grow-1">
+                                                <div class="small text-secondary text-nowrap">{{ inputMeta }}</div>
+                                                <div class="input-group input-group-sm input-toolbar-group flex-grow-1" style="min-width: min(100%, 220px); max-width: 20rem;">
+                                                    <label class="input-group-text mb-0 d-none d-lg-inline" for="input-format-select">Formato</label>
                                                     <select id="input-format-select" class="form-select" v-model="state.inputFormat">
                                                         <option v-for="format in inputFormats" :key="format.value" :value="format.value">
                                                             {{ format.label }}
                                                         </option>
                                                     </select>
-                                                    <button class="btn btn-outline-secondary" type="button" @click="toggleSidebar" title="Configuracoes">
-                                                        <i class="fas fa-cog" aria-hidden="true"></i>
-                                                    </button>
-                                                    <button class="btn btn-outline-secondary" type="button" @click="toggleMainAccordion('input')" :title="state.inputSectionCollapsed ? 'Expandir secao' : 'Colapsar secao'">
-                                                        <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
+                                                    <button
+                                                        class="btn btn-outline-primary"
+                                                        type="button"
+                                                        @click="pasteInputFromClipboard"
+                                                        title="Colar da area de transferencia"
+                                                        aria-label="Colar da area de transferencia"
+                                                    >
+                                                        <i class="fas fa-clipboard" aria-hidden="true"></i>
                                                     </button>
                                                 </div>
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleSidebar" title="Configuracoes">
+                                                    <i class="fas fa-cog" aria-hidden="true"></i>
+                                                </button>
+                                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="toggleMainAccordion('input')" :title="state.inputSectionCollapsed ? 'Expandir secao' : 'Colapsar secao'">
+                                                    <i :class="state.inputSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
+                                                </button>
                                             </div>
                                         </div>
                                         <div v-if="!state.inputSectionCollapsed">
@@ -3433,6 +3624,10 @@
                                             </div>
                                             <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end flex-grow-1">
                                                 <div class="small text-secondary text-nowrap">{{ previewMeta }}</div>
+                                                <div class="form-check form-switch mb-0 preview-skip-toggle" title="Converte sem carregar a tabela do preview">
+                                                    <input id="skip-preview-load" class="form-check-input" type="checkbox" role="switch" v-model="state.skipPreviewLoad">
+                                                    <label class="form-check-label small text-nowrap" for="skip-preview-load">Apenas converter</label>
+                                                </div>
                                                 <div class="input-group input-group-sm preset-toolbar-group flex-grow-1" style="min-width: min(100%, 260px); max-width: 23rem;">
                                                     <label class="input-group-text mb-0 text-secondary small d-none d-lg-inline" for="preset-select">Preset</label>
                                                     <select
@@ -3483,7 +3678,11 @@
 
                                         <div v-if="!state.previewSectionCollapsed">
 
-                                        
+                                        <div v-if="state.skipPreviewLoad" class="preview-empty mb-0">
+                                            Modo conversao directa activo: o objeto padrao nao e carregado. Use o Output para ver o resultado; active o preview para editar, filtrar ou usar presets.
+                                        </div>
+
+                                        <template v-else>
                                         <div v-if="duplicateHeaderMessage" class="status-chip warning mb-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
                                             <span>{{ duplicateHeaderMessage }}</span>
                                             <button class="btn btn-sm btn-outline-warning" type="button" @click="dedupeStandardHeaders">
@@ -3634,6 +3833,7 @@
                                         <div v-else class="preview-empty">
                                             O objeto padrao sera exibido aqui assim que o input for lido com sucesso.
                                         </div>
+                                        </template>
                                         </div>
                                     </div>
                                 </div>

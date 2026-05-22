@@ -34,6 +34,17 @@ Não existe: o resultado aparece no textarea do Output e a cópia é **manual** 
 
 Com muitas linhas ou células, a barra de estado do preview pode mostrar um aviso. Use paginação no preview para reduzir nós no DOM.
 
+### Modo «Apenas converter» (sem preview)
+
+- Toggle no cabeçalho da secção **Objeto padrão**: com a opção activa, o parse do input **não** hidrata a tabela canónica nem renderiza a grelha do preview (menos DOM e memória de estruturas de edição).
+- O **Output** é gerado directamente a partir do resultado do parser (todas as colunas, ordem original das linhas). Filtros, ordenação do preview, edição de células, visibilidade linha/coluna e **presets com acções de preview** não afectam o export neste modo.
+- Preferência persistida em `excelconverter.preferences.v1` (`skipPreviewLoad`).
+
+### Colar da área de transferência (Input)
+
+- Botão no cabeçalho do Input (`navigator.clipboard.readText`) grava o texto em `state.input` sem exigir o textarea visível: se a secção Input estiver colapsada, o `<textarea>` **não** é montado no DOM.
+- Após colar com sucesso, a secção Input colapsa; o **Preview** abre no modo normal. No modo apenas converter, **Output e Preview permanecem fechados** (o resultado fica em memória para o botão Copiar do Output, sem montar o textarea grande).
+
 ## Presets (sidebar + histórico do preview)
 
 - **O que grava**: um snapshot das opções visíveis no **sidebar** (formato de entrada/saída, delimitadores, opções SQL/XML, renomeação em massa de cabeçalhos no sidebar, largura/abertura do painel, etc.) e uma lista ordenada de **acções estruturadas** executadas no preview desde o último parse do input (sem cada edição de célula). Inclui **vista do preview** relevante para operações em massa: **filtro por coluna** (menu da coluna), **ordenação do preview** (ícone no cabeçalho) e **texto de pesquisa** do preview; a ordem no histórico replica filtro/ordem/pesquisa antes de preenchimentos em sequência, etc.

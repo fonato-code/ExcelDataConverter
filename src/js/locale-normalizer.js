@@ -352,6 +352,50 @@
         return formatFlexibleDate("YYYY-MM-DD HH:mm:ss.fff");
     }
 
+    function splitInputLines(value) {
+        return String(value || "").split(/\r\n|\n|\r/);
+    }
+
+    function normalizeNumberLine(line, numberInputLocale, numberOutputLocale) {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) {
+            return { value: "", error: "" };
+        }
+
+        const parsed = normalizeNumericString(trimmed, numberInputLocale);
+        if (!Number.isFinite(parsed)) {
+            return {
+                value: line,
+                error: "O valor informado nao foi reconhecido como numero nesse locale."
+            };
+        }
+
+        return {
+            value: formatNumericByLocale(parsed, numberOutputLocale),
+            error: ""
+        };
+    }
+
+    function normalizeDateLine(line, dateInputFormat, dateOutputFormat, dateOutputManual) {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) {
+            return { value: "", error: "" };
+        }
+
+        const parsedDate = parseDateByFormat(trimmed, dateInputFormat);
+        if (!parsedDate) {
+            return {
+                value: line,
+                error: "O valor informado nao foi reconhecido como data nesse formato."
+            };
+        }
+
+        return {
+            value: formatDateByFormat(parsedDate, dateOutputFormat, dateOutputManual),
+            error: ""
+        };
+    }
+
     function loadPreferences(defaultState) {
         try {
             const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
@@ -405,36 +449,66 @@
                     };
                 }
 
-                if (state.normalizeMode === "number") {
-                    const parsed = normalizeNumericString(inputValue, state.numberInputLocale);
-                    if (!Number.isFinite(parsed)) {
-                        return {
-                            value: "",
-                            error: "O valor informado nao foi reconhecido como numero nesse locale.",
-                            info: ""
-                        };
+                const lines = splitInputLines(inputValue);
+                const hasMultipleLines = lines.length > 1 || inputValue.indexOf("\n") !== -1 || inputValue.indexOf("\r") !== -1;
+                const outputLines = [];
+                let errorCount = 0;
+                let convertedCount = 0;
+
+                lines.forEach(function (line) {
+                    let lineResult;
+
+                    if (state.normalizeMode === "number") {
+                        lineResult = normalizeNumberLine(line, state.numberInputLocale, state.numberOutputLocale);
+                    } else {
+                        lineResult = normalizeDateLine(
+                            line,
+                            state.dateInputFormat,
+                            state.dateOutputFormat,
+                            state.dateOutputManual
+                        );
                     }
 
+                    if (lineResult.error) {
+                        errorCount += 1;
+                    } else if (String(line || "").trim()) {
+                        convertedCount += 1;
+                    }
+
+                    outputLines.push(lineResult.value);
+                });
+
+                const value = outputLines.join("\n");
+                const nonEmptyLineCount = lines.filter(function (line) {
+                    return String(line || "").trim();
+                }).length;
+
+                if (errorCount > 0) {
                     return {
-                        value: formatNumericByLocale(parsed, state.numberOutputLocale),
-                        error: "",
-                        info: "Numero convertido com sucesso."
+                        value: value,
+                        error: errorCount + " linha(s) nao foram reconhecidas no formato indicado.",
+                        info: convertedCount > 0
+                            ? (convertedCount + " de " + nonEmptyLineCount + " linha(s) convertida(s).")
+                            : ""
                     };
                 }
 
-                const parsedDate = parseDateByFormat(inputValue, state.dateInputFormat);
-                if (!parsedDate) {
+                if (state.normalizeMode === "number") {
                     return {
-                        value: "",
-                        error: "O valor informado nao foi reconhecido como data nesse formato.",
-                        info: ""
+                        value: value,
+                        error: "",
+                        info: hasMultipleLines
+                            ? (convertedCount + " numero(s) convertido(s).")
+                            : "Numero convertido com sucesso."
                     };
                 }
 
                 return {
-                    value: formatDateByFormat(parsedDate, state.dateOutputFormat, state.dateOutputManual),
+                    value: value,
                     error: "",
-                    info: "Data convertida com sucesso."
+                    info: hasMultipleLines
+                        ? (convertedCount + " data(s) convertida(s).")
+                        : "Data convertida com sucesso."
                 };
             });
 
