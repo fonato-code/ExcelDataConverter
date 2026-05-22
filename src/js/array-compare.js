@@ -203,12 +203,18 @@
         return map;
     }
 
-    function formatRowPreview(row, headers, limit) {
-        const maxColumns = typeof limit === "number" ? limit : 6;
-        return headers.slice(0, maxColumns).map(function (header, index) {
-            const cell = index < row.length ? row[index] : "";
-            return header + ": " + String(cell);
-        }).join(" | ");
+    function formatCellValue(value) {
+        if (value == null) {
+            return "";
+        }
+
+        return String(value);
+    }
+
+    function rowCellsByHeaders(row, headers) {
+        return headers.map(function (_header, index) {
+            return formatCellValue(index < row.length ? row[index] : "");
+        });
     }
 
     createApp({
@@ -237,7 +243,9 @@
                 sortMode: "none",
                 optionsSectionCollapsed: false,
                 resultsSectionCollapsed: false,
-                activeResultTab: "summary",
+                activeResultTab: "onlyA",
+                resultPage: 1,
+                resultPageSize: 100,
                 toasts: []
             };
 
@@ -304,7 +312,8 @@
                     sortMode: state.sortMode,
                     optionsSectionCollapsed: state.optionsSectionCollapsed,
                     resultsSectionCollapsed: state.resultsSectionCollapsed,
-                    activeResultTab: state.activeResultTab
+                    activeResultTab: state.activeResultTab,
+                    resultPageSize: state.resultPageSize
                 };
             }, function (preferences) {
                 window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
@@ -394,7 +403,9 @@
                     onlyInA: [],
                     onlyInB: [],
                     inBoth: [],
-                    pairLabels: []
+                    pairLabels: [],
+                    headersA: [],
+                    headersB: []
                 };
 
                 if (!state.listA.input.trim() && !state.listB.input.trim()) {
@@ -455,10 +466,7 @@
                             onlyInA.push({
                                 key: key,
                                 rowIndex: entry.rowIndex,
-                                preview: formatRowPreview(entry.row, headersA),
-                                values: columnNamesA.map(function (columnName) {
-                                    return buildRowKey(entry.row, columnName, headersA, options);
-                                })
+                                row: entry.row.slice()
                             });
                         });
                     }
@@ -470,10 +478,7 @@
                             onlyInB.push({
                                 key: key,
                                 rowIndex: entry.rowIndex,
-                                preview: formatRowPreview(entry.row, headersB),
-                                values: columnNamesB.map(function (columnName) {
-                                    return buildRowKey(entry.row, columnName, headersB, options);
-                                })
+                                row: entry.row.slice()
                             });
                         });
                     }
@@ -496,18 +501,8 @@
                             key: key,
                             rowIndexA: entryA ? entryA.rowIndex : null,
                             rowIndexB: entryB ? entryB.rowIndex : null,
-                            previewA: entryA ? formatRowPreview(entryA.row, headersA) : "",
-                            previewB: entryB ? formatRowPreview(entryB.row, headersB) : "",
-                            valuesA: entryA
-                                ? columnNamesA.map(function (columnName) {
-                                    return buildRowKey(entryA.row, columnName, headersA, options);
-                                })
-                                : [],
-                            valuesB: entryB
-                                ? columnNamesB.map(function (columnName) {
-                                    return buildRowKey(entryB.row, columnName, headersB, options);
-                                })
-                                : []
+                            rowA: entryA ? entryA.row.slice() : [],
+                            rowB: entryB ? entryB.row.slice() : []
                         });
                     }
                 });
@@ -527,8 +522,138 @@
                     onlyInA: onlyInA,
                     onlyInB: onlyInB,
                     inBoth: inBoth,
-                    pairLabels: pairLabels
+                    pairLabels: pairLabels,
+                    headersA: headersA,
+                    headersB: headersB
                 };
+            });
+
+            const activeResultItems = computed(function () {
+                if (!comparisonResult.value.ready) {
+                    return [];
+                }
+
+                if (state.activeResultTab === "onlyA") {
+                    return comparisonResult.value.onlyInA;
+                }
+
+                if (state.activeResultTab === "onlyB") {
+                    return comparisonResult.value.onlyInB;
+                }
+
+                return comparisonResult.value.inBoth;
+            });
+
+            const resultTableHeaders = computed(function () {
+                if (!comparisonResult.value.ready) {
+                    return [];
+                }
+
+                if (state.activeResultTab === "onlyA") {
+                    return comparisonResult.value.headersA.slice();
+                }
+
+                if (state.activeResultTab === "onlyB") {
+                    return comparisonResult.value.headersB.slice();
+                }
+
+                return comparisonResult.value.headersA.map(function (header) {
+                    return "A · " + header;
+                }).concat(comparisonResult.value.headersB.map(function (header) {
+                    return "B · " + header;
+                }));
+            });
+
+            const resultTableRows = computed(function () {
+                if (!comparisonResult.value.ready) {
+                    return [];
+                }
+
+                if (state.activeResultTab === "onlyA") {
+                    const headers = comparisonResult.value.headersA;
+                    return comparisonResult.value.onlyInA.map(function (item) {
+                        return {
+                            key: item.key,
+                            cells: rowCellsByHeaders(item.row, headers)
+                        };
+                    });
+                }
+
+                if (state.activeResultTab === "onlyB") {
+                    const headers = comparisonResult.value.headersB;
+                    return comparisonResult.value.onlyInB.map(function (item) {
+                        return {
+                            key: item.key,
+                            cells: rowCellsByHeaders(item.row, headers)
+                        };
+                    });
+                }
+
+                const headersA = comparisonResult.value.headersA;
+                const headersB = comparisonResult.value.headersB;
+                return comparisonResult.value.inBoth.map(function (item) {
+                    return {
+                        key: item.key,
+                        cells: rowCellsByHeaders(item.rowA, headersA).concat(rowCellsByHeaders(item.rowB, headersB))
+                    };
+                });
+            });
+
+            const resultPageCount = computed(function () {
+                return Math.max(1, Math.ceil(resultTableRows.value.length / state.resultPageSize));
+            });
+
+            const paginatedResultRows = computed(function () {
+                const safePage = Math.min(state.resultPage, resultPageCount.value);
+                const start = (safePage - 1) * state.resultPageSize;
+                return resultTableRows.value.slice(start, start + state.resultPageSize);
+            });
+
+            const resultRangeLabel = computed(function () {
+                const total = resultTableRows.value.length;
+                if (!total) {
+                    return "Nenhuma linha";
+                }
+
+                const safePage = Math.min(state.resultPage, resultPageCount.value);
+                const start = ((safePage - 1) * state.resultPageSize) + 1;
+                const end = Math.min(start + state.resultPageSize - 1, total);
+                return "Linhas " + start + "–" + end + " de " + total;
+            });
+
+            function goToResultPage(page) {
+                state.resultPage = Math.max(1, Math.min(resultPageCount.value, page));
+            }
+
+            function setActiveResultTab(tab) {
+                state.activeResultTab = tab;
+                state.resultPage = 1;
+            }
+
+            watch(function () {
+                return state.activeResultTab + "|" + state.resultPageSize + "|" + resultTableRows.value.length;
+            }, function () {
+                if (state.resultPage > resultPageCount.value) {
+                    state.resultPage = resultPageCount.value;
+                }
+            });
+
+            watch(function () {
+                return comparisonResult.value.ready
+                    ? comparisonResult.value.onlyInA.length
+                        + "|"
+                        + comparisonResult.value.onlyInB.length
+                        + "|"
+                        + comparisonResult.value.inBoth.length
+                    : "";
+            }, function () {
+                state.resultPage = 1;
+            });
+
+            watch(function () {
+                return state.resultPageSize;
+            }, function () {
+                state.resultPage = 1;
             });
 
             function toggleTheme() {
@@ -647,6 +772,14 @@
                 listBMeta,
                 validColumnPairs,
                 comparisonResult,
+                activeResultItems,
+                resultTableHeaders,
+                resultTableRows,
+                paginatedResultRows,
+                resultPageCount,
+                resultRangeLabel,
+                goToResultPage,
+                setActiveResultTab,
                 toggleTheme,
                 toggleListSection,
                 addColumnPair,
@@ -907,86 +1040,87 @@
 
                                     <ul class="nav nav-pills compare-result-tabs mb-3">
                                         <li class="nav-item">
-                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'onlyA' }" type="button" @click="state.activeResultTab = 'onlyA'">
+                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'onlyA' }" type="button" @click="setActiveResultTab('onlyA')">
                                                 So A ({{ comparisonResult.onlyInA.length }})
                                             </button>
                                         </li>
                                         <li class="nav-item">
-                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'onlyB' }" type="button" @click="state.activeResultTab = 'onlyB'">
+                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'onlyB' }" type="button" @click="setActiveResultTab('onlyB')">
                                                 So B ({{ comparisonResult.onlyInB.length }})
                                             </button>
                                         </li>
                                         <li class="nav-item">
-                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'both' }" type="button" @click="state.activeResultTab = 'both'">
+                                            <button class="nav-link" :class="{ active: state.activeResultTab === 'both' }" type="button" @click="setActiveResultTab('both')">
                                                 Em comum ({{ comparisonResult.inBoth.length }})
                                             </button>
                                         </li>
                                     </ul>
 
-                                    <div class="preview-table-wrap" v-if="state.activeResultTab === 'onlyA'">
-                                        <table class="table table-sm preview-table" v-if="comparisonResult.onlyInA.length">
-                                            <thead>
-                                                <tr>
-                                                    <th>#</th>
-                                                    <th>Chave</th>
-                                                    <th>Valores</th>
-                                                    <th>Linha</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr v-for="(item, index) in comparisonResult.onlyInA" :key="'only-a-' + index">
-                                                    <td>{{ index + 1 }}</td>
-                                                    <td>{{ item.key }}</td>
-                                                    <td>{{ item.values.join(' | ') }}</td>
-                                                    <td class="text-start">{{ item.preview }}</td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-                                        <div v-else class="preview-empty">Nenhum registro exclusivo na Lista A.</div>
-                                    </div>
+                                    <template v-if="activeResultItems.length && resultTableHeaders.length">
+                                        <div class="preview-toolbar mb-3">
+                                            <div class="preview-page-size">
+                                                <select class="form-select form-select-sm" v-model.number="state.resultPageSize">
+                                                    <option :value="100">100</option>
+                                                    <option :value="250">250</option>
+                                                    <option :value="500">500</option>
+                                                    <option :value="1000">1000</option>
+                                                </select>
+                                                <span>linhas por pagina</span>
+                                            </div>
+                                            <div class="small text-secondary">{{ resultRangeLabel }}</div>
+                                        </div>
 
-                                    <div class="preview-table-wrap" v-else-if="state.activeResultTab === 'onlyB'">
-                                        <table class="table table-sm preview-table" v-if="comparisonResult.onlyInB.length">
-                                            <thead>
-                                                <tr>
-                                                    <th>#</th>
-                                                    <th>Chave</th>
-                                                    <th>Valores</th>
-                                                    <th>Linha</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr v-for="(item, index) in comparisonResult.onlyInB" :key="'only-b-' + index">
-                                                    <td>{{ index + 1 }}</td>
-                                                    <td>{{ item.key }}</td>
-                                                    <td>{{ item.values.join(' | ') }}</td>
-                                                    <td class="text-start">{{ item.preview }}</td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-                                        <div v-else class="preview-empty">Nenhum registro exclusivo na Lista B.</div>
-                                    </div>
+                                        <div class="preview-table-wrap compare-result-table-wrap">
+                                            <table class="table table-sm align-middle mb-0 preview-table compare-result-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th class="compare-index-col">#</th>
+                                                        <th class="compare-key-col">Chave</th>
+                                                        <th v-for="(header, headerIndex) in resultTableHeaders" :key="'result-header-' + headerIndex">
+                                                            {{ header }}
+                                                        </th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr v-for="(rowItem, rowIndex) in paginatedResultRows" :key="'result-row-' + state.activeResultTab + '-' + rowIndex + '-' + rowItem.key">
+                                                        <td class="compare-index-col">
+                                                            <div class="form-control form-control-sm preview-input compare-readonly-cell">{{ ((state.resultPage - 1) * state.resultPageSize) + rowIndex + 1 }}</div>
+                                                        </td>
+                                                        <td class="compare-key-col">
+                                                            <div class="form-control form-control-sm preview-input compare-readonly-cell" :title="rowItem.key">{{ rowItem.key }}</div>
+                                                        </td>
+                                                        <td v-for="(cell, cellIndex) in rowItem.cells" :key="'result-cell-' + rowIndex + '-' + cellIndex">
+                                                            <div class="form-control form-control-sm preview-input compare-readonly-cell" :title="cell">{{ cell }}</div>
+                                                        </td>
+                                                    </tr>
+                                                    <tr v-if="!paginatedResultRows.length">
+                                                        <td class="preview-empty-row" :colspan="resultTableHeaders.length + 2">
+                                                            Nenhuma linha nesta pagina.
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
 
-                                    <div class="preview-table-wrap" v-else>
-                                        <table class="table table-sm preview-table" v-if="comparisonResult.inBoth.length">
-                                            <thead>
-                                                <tr>
-                                                    <th>#</th>
-                                                    <th>Chave</th>
-                                                    <th>Lista A</th>
-                                                    <th>Lista B</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr v-for="(item, index) in comparisonResult.inBoth" :key="'both-' + index">
-                                                    <td>{{ index + 1 }}</td>
-                                                    <td>{{ item.key }}</td>
-                                                    <td class="text-start">{{ item.previewA || '—' }}</td>
-                                                    <td class="text-start">{{ item.previewB || '—' }}</td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-                                        <div v-else class="preview-empty">Nenhum registro em comum com os criterios actuais.</div>
+                                        <div class="preview-pagination">
+                                            <div class="small text-secondary">{{ resultRangeLabel }}</div>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button class="btn btn-outline-secondary" type="button" @click="goToResultPage(state.resultPage - 1)" :disabled="state.resultPage <= 1">
+                                                    <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                                                </button>
+                                                <button class="btn btn-outline-secondary" type="button" disabled>
+                                                    Pagina {{ state.resultPage }} / {{ resultPageCount }}
+                                                </button>
+                                                <button class="btn btn-outline-secondary" type="button" @click="goToResultPage(state.resultPage + 1)" :disabled="state.resultPage >= resultPageCount">
+                                                    <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <div v-else class="preview-empty">
+                                        <template v-if="state.activeResultTab === 'onlyA'">Nenhum registro exclusivo na Lista A.</template>
+                                        <template v-else-if="state.activeResultTab === 'onlyB'">Nenhum registro exclusivo na Lista B.</template>
+                                        <template v-else>Nenhum registro em comum com os criterios actuais.</template>
                                     </div>
                                 </template>
                             </div>

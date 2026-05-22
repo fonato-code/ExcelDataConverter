@@ -270,6 +270,40 @@ html {
     background: linear-gradient(135deg, rgba(53, 92, 255, 0.95), rgba(17, 184, 166, 0.88));
 }
 
+.compare-result-table-wrap {
+    max-height: 28rem;
+}
+
+.compare-result-table thead th,
+.compare-result-table tbody td {
+    text-align: left;
+    vertical-align: top;
+}
+
+.compare-index-col {
+    width: 1%;
+    min-width: 3.5rem;
+    white-space: nowrap;
+}
+
+.compare-key-col {
+    min-width: 10rem;
+    max-width: 16rem;
+}
+
+.compare-readonly-cell {
+    cursor: default;
+    min-width: 8rem;
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compare-result-table .preview-empty-row {
+    text-align: center !important;
+}
+
 .locale-grid {
     display: grid;
     grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
