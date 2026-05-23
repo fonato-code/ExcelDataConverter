@@ -304,6 +304,72 @@ html {
     text-align: center !important;
 }
 
+.compare-result-table th.compare-column-key,
+.compare-result-table td.compare-column-key {
+    background: rgba(53, 92, 255, 0.1) !important;
+    box-shadow: inset 0 -2px 0 rgba(53, 92, 255, 0.55);
+}
+
+.compare-actions-col {
+    width: 1%;
+    min-width: 3.25rem;
+    white-space: nowrap;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.compare-detail-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1090;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(9, 17, 31, 0.62);
+    backdrop-filter: blur(4px);
+}
+
+.compare-detail-modal {
+    width: min(1100px, 100%);
+    max-height: calc(100vh - 3rem);
+    overflow: auto;
+    border-radius: 1.25rem;
+}
+
+.compare-detail-lists-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+}
+
+.compare-detail-field-name {
+    width: 38%;
+    min-width: 8rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.compare-detail-value {
+    max-width: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.compare-detail-pairs-table th,
+.compare-detail-pairs-table td {
+    font-size: 0.85rem;
+    text-align: left;
+    vertical-align: top;
+}
+
+@media (max-width: 991.98px) {
+    .compare-detail-lists-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .locale-grid {
     display: grid;
     grid-template-columns: minmax(0, 360px) minmax(0, 1fr);

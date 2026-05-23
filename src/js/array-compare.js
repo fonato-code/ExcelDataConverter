@@ -217,6 +217,15 @@
         });
     }
 
+    function getRawCellValue(row, header, headers) {
+        const columnIndex = headers.indexOf(header);
+        if (columnIndex === -1) {
+            return "";
+        }
+
+        return formatCellValue(columnIndex < row.length ? row[columnIndex] : "");
+    }
+
     createApp({
         setup() {
             const defaultState = {
@@ -246,6 +255,9 @@
                 activeResultTab: "onlyA",
                 resultPage: 1,
                 resultPageSize: 100,
+                resultSearch: "",
+                compareDetailOpen: false,
+                compareDetailSourceIndex: -1,
                 toasts: []
             };
 
@@ -544,6 +556,18 @@
                 return comparisonResult.value.inBoth;
             });
 
+            const comparedHeadersA = computed(function () {
+                return new Set(validColumnPairs.value.map(function (pair) {
+                    return pair.columnA;
+                }));
+            });
+
+            const comparedHeadersB = computed(function () {
+                return new Set(validColumnPairs.value.map(function (pair) {
+                    return pair.columnB;
+                }));
+            });
+
             const resultTableHeaders = computed(function () {
                 if (!comparisonResult.value.ready) {
                     return [];
@@ -564,6 +588,42 @@
                 }));
             });
 
+            const resultTableHeaderMeta = computed(function () {
+                if (!comparisonResult.value.ready) {
+                    return [];
+                }
+
+                if (state.activeResultTab === "onlyA") {
+                    return comparisonResult.value.headersA.map(function (header) {
+                        return {
+                            label: header,
+                            isCompareColumn: comparedHeadersA.value.has(header)
+                        };
+                    });
+                }
+
+                if (state.activeResultTab === "onlyB") {
+                    return comparisonResult.value.headersB.map(function (header) {
+                        return {
+                            label: header,
+                            isCompareColumn: comparedHeadersB.value.has(header)
+                        };
+                    });
+                }
+
+                return comparisonResult.value.headersA.map(function (header) {
+                    return {
+                        label: "A · " + header,
+                        isCompareColumn: comparedHeadersA.value.has(header)
+                    };
+                }).concat(comparisonResult.value.headersB.map(function (header) {
+                    return {
+                        label: "B · " + header,
+                        isCompareColumn: comparedHeadersB.value.has(header)
+                    };
+                }));
+            });
+
             const resultTableRows = computed(function () {
                 if (!comparisonResult.value.ready) {
                     return [];
@@ -571,54 +631,142 @@
 
                 if (state.activeResultTab === "onlyA") {
                     const headers = comparisonResult.value.headersA;
-                    return comparisonResult.value.onlyInA.map(function (item) {
+                    return comparisonResult.value.onlyInA.map(function (item, sourceIndex) {
                         return {
                             key: item.key,
-                            cells: rowCellsByHeaders(item.row, headers)
+                            cells: rowCellsByHeaders(item.row, headers),
+                            sourceIndex: sourceIndex
                         };
                     });
                 }
 
                 if (state.activeResultTab === "onlyB") {
                     const headers = comparisonResult.value.headersB;
-                    return comparisonResult.value.onlyInB.map(function (item) {
+                    return comparisonResult.value.onlyInB.map(function (item, sourceIndex) {
                         return {
                             key: item.key,
-                            cells: rowCellsByHeaders(item.row, headers)
+                            cells: rowCellsByHeaders(item.row, headers),
+                            sourceIndex: sourceIndex
                         };
                     });
                 }
 
                 const headersA = comparisonResult.value.headersA;
                 const headersB = comparisonResult.value.headersB;
-                return comparisonResult.value.inBoth.map(function (item) {
+                return comparisonResult.value.inBoth.map(function (item, sourceIndex) {
                     return {
                         key: item.key,
-                        cells: rowCellsByHeaders(item.rowA, headersA).concat(rowCellsByHeaders(item.rowB, headersB))
+                        cells: rowCellsByHeaders(item.rowA, headersA).concat(rowCellsByHeaders(item.rowB, headersB)),
+                        sourceIndex: sourceIndex,
+                        bothItem: item
                     };
                 });
             });
 
+            const filteredResultTableRows = computed(function () {
+                const search = state.resultSearch.trim().toLowerCase();
+                const rows = resultTableRows.value;
+
+                if (!search) {
+                    return rows;
+                }
+
+                return rows.filter(function (rowItem) {
+                    if (String(rowItem.key || "").toLowerCase().indexOf(search) !== -1) {
+                        return true;
+                    }
+
+                    return rowItem.cells.some(function (cell) {
+                        return String(cell || "").toLowerCase().indexOf(search) !== -1;
+                    });
+                });
+            });
+
             const resultPageCount = computed(function () {
-                return Math.max(1, Math.ceil(resultTableRows.value.length / state.resultPageSize));
+                return Math.max(1, Math.ceil(filteredResultTableRows.value.length / state.resultPageSize));
             });
 
             const paginatedResultRows = computed(function () {
                 const safePage = Math.min(state.resultPage, resultPageCount.value);
                 const start = (safePage - 1) * state.resultPageSize;
-                return resultTableRows.value.slice(start, start + state.resultPageSize);
+                return filteredResultTableRows.value.slice(start, start + state.resultPageSize);
             });
 
             const resultRangeLabel = computed(function () {
-                const total = resultTableRows.value.length;
+                const total = filteredResultTableRows.value.length;
+                const fullTotal = resultTableRows.value.length;
+
                 if (!total) {
-                    return "Nenhuma linha";
+                    return state.resultSearch.trim()
+                        ? "Nenhuma linha encontrada na busca"
+                        : "Nenhuma linha";
                 }
 
                 const safePage = Math.min(state.resultPage, resultPageCount.value);
                 const start = ((safePage - 1) * state.resultPageSize) + 1;
                 const end = Math.min(start + state.resultPageSize - 1, total);
-                return "Linhas " + start + "–" + end + " de " + total;
+                const suffix = state.resultSearch.trim() && fullTotal !== total
+                    ? " (filtrado de " + fullTotal + ")"
+                    : "";
+
+                return "Linhas " + start + "–" + end + " de " + total + suffix;
+            });
+
+            const compareDetailContent = computed(function () {
+                if (!state.compareDetailOpen || state.compareDetailSourceIndex < 0 || !comparisonResult.value.ready) {
+                    return null;
+                }
+
+                const item = comparisonResult.value.inBoth[state.compareDetailSourceIndex];
+                if (!item) {
+                    return null;
+                }
+
+                const options = compareOptions.value;
+                const headersA = comparisonResult.value.headersA;
+                const headersB = comparisonResult.value.headersB;
+
+                const pairDetails = validColumnPairs.value.map(function (pair) {
+                    const rawA = getRawCellValue(item.rowA, pair.columnA, headersA);
+                    const rawB = getRawCellValue(item.rowB, pair.columnB, headersB);
+                    const normalizedA = buildRowKey(item.rowA, pair.columnA, headersA, options);
+                    const normalizedB = buildRowKey(item.rowB, pair.columnB, headersB, options);
+
+                    return {
+                        columnA: pair.columnA,
+                        columnB: pair.columnB,
+                        rawA: rawA,
+                        rawB: rawB,
+                        normalizedA: normalizedA,
+                        normalizedB: normalizedB,
+                        matches: normalizedA === normalizedB
+                    };
+                });
+
+                return {
+                    key: item.key,
+                    rowIndexA: item.rowIndexA,
+                    rowIndexB: item.rowIndexB,
+                    pairDetails: pairDetails,
+                    listA: headersA.map(function (header, index) {
+                        return {
+                            header: header,
+                            value: formatCellValue(index < item.rowA.length ? item.rowA[index] : ""),
+                            isCompareColumn: comparedHeadersA.value.has(header)
+                        };
+                    }),
+                    listB: headersB.map(function (header, index) {
+                        return {
+                            header: header,
+                            value: formatCellValue(index < item.rowB.length ? item.rowB[index] : ""),
+                            isCompareColumn: comparedHeadersB.value.has(header)
+                        };
+                    })
+                };
+            });
+
+            const resultTableColspan = computed(function () {
+                return resultTableHeaders.value.length + 2 + (state.activeResultTab === "both" ? 1 : 0);
             });
 
             function goToResultPage(page) {
@@ -628,10 +776,22 @@
             function setActiveResultTab(tab) {
                 state.activeResultTab = tab;
                 state.resultPage = 1;
+                state.resultSearch = "";
+                closeCompareDetail();
+            }
+
+            function openCompareDetail(sourceIndex) {
+                state.compareDetailSourceIndex = sourceIndex;
+                state.compareDetailOpen = true;
+            }
+
+            function closeCompareDetail() {
+                state.compareDetailOpen = false;
+                state.compareDetailSourceIndex = -1;
             }
 
             watch(function () {
-                return state.activeResultTab + "|" + state.resultPageSize + "|" + resultTableRows.value.length;
+                return state.activeResultTab + "|" + state.resultPageSize + "|" + filteredResultTableRows.value.length;
             }, function () {
                 if (state.resultPage > resultPageCount.value) {
                     state.resultPage = resultPageCount.value;
@@ -648,10 +808,17 @@
                     : "";
             }, function () {
                 state.resultPage = 1;
+                closeCompareDetail();
             });
 
             watch(function () {
                 return state.resultPageSize;
+            }, function () {
+                state.resultPage = 1;
+            });
+
+            watch(function () {
+                return state.resultSearch;
             }, function () {
                 state.resultPage = 1;
             });
@@ -774,12 +941,18 @@
                 comparisonResult,
                 activeResultItems,
                 resultTableHeaders,
+                resultTableHeaderMeta,
                 resultTableRows,
+                filteredResultTableRows,
                 paginatedResultRows,
                 resultPageCount,
                 resultRangeLabel,
+                resultTableColspan,
+                compareDetailContent,
                 goToResultPage,
                 setActiveResultTab,
+                openCompareDetail,
+                closeCompareDetail,
                 toggleTheme,
                 toggleListSection,
                 addColumnPair,
@@ -1060,6 +1233,9 @@
                                         <div class="preview-toolbar mb-3">
                                             <div class="preview-page-size">
                                                 <select class="form-select form-select-sm" v-model.number="state.resultPageSize">
+                                                    <option :value="10">10</option>
+                                                    <option :value="25">25</option>
+                                                    <option :value="50">50</option>
                                                     <option :value="100">100</option>
                                                     <option :value="250">250</option>
                                                     <option :value="500">500</option>
@@ -1067,35 +1243,58 @@
                                                 </select>
                                                 <span>linhas por pagina</span>
                                             </div>
-                                            <div class="small text-secondary">{{ resultRangeLabel }}</div>
+                                            <div class="input-group input-group-sm preview-search-group">
+                                                <span class="input-group-text"><i class="fas fa-search" aria-hidden="true"></i></span>
+                                                <input class="form-control" v-model="state.resultSearch" placeholder="Buscar nas linhas">
+                                            </div>
                                         </div>
+                                        <div class="small text-secondary mb-2 px-1">{{ resultRangeLabel }}</div>
 
                                         <div class="preview-table-wrap compare-result-table-wrap">
                                             <table class="table table-sm align-middle mb-0 preview-table compare-result-table">
                                                 <thead>
                                                     <tr>
+                                                        <th v-if="state.activeResultTab === 'both'" class="compare-actions-col">Detalhe</th>
                                                         <th class="compare-index-col">#</th>
                                                         <th class="compare-key-col">Chave</th>
-                                                        <th v-for="(header, headerIndex) in resultTableHeaders" :key="'result-header-' + headerIndex">
-                                                            {{ header }}
+                                                        <th
+                                                            v-for="(headerMeta, headerIndex) in resultTableHeaderMeta"
+                                                            :key="'result-header-' + headerIndex"
+                                                            :class="{ 'compare-column-key': headerMeta.isCompareColumn }"
+                                                        >
+                                                            {{ headerMeta.label }}
                                                         </th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
                                                     <tr v-for="(rowItem, rowIndex) in paginatedResultRows" :key="'result-row-' + state.activeResultTab + '-' + rowIndex + '-' + rowItem.key">
+                                                        <td v-if="state.activeResultTab === 'both'" class="compare-actions-col">
+                                                            <button
+                                                                class="btn btn-outline-primary btn-sm"
+                                                                type="button"
+                                                                title="Ver detalhes da comparacao"
+                                                                @click="openCompareDetail(rowItem.sourceIndex)"
+                                                            >
+                                                                <i class="fas fa-search-plus" aria-hidden="true"></i>
+                                                            </button>
+                                                        </td>
                                                         <td class="compare-index-col">
                                                             <div class="form-control form-control-sm preview-input compare-readonly-cell">{{ ((state.resultPage - 1) * state.resultPageSize) + rowIndex + 1 }}</div>
                                                         </td>
                                                         <td class="compare-key-col">
                                                             <div class="form-control form-control-sm preview-input compare-readonly-cell" :title="rowItem.key">{{ rowItem.key }}</div>
                                                         </td>
-                                                        <td v-for="(cell, cellIndex) in rowItem.cells" :key="'result-cell-' + rowIndex + '-' + cellIndex">
+                                                        <td
+                                                            v-for="(cell, cellIndex) in rowItem.cells"
+                                                            :key="'result-cell-' + rowIndex + '-' + cellIndex"
+                                                            :class="{ 'compare-column-key': resultTableHeaderMeta[cellIndex] && resultTableHeaderMeta[cellIndex].isCompareColumn }"
+                                                        >
                                                             <div class="form-control form-control-sm preview-input compare-readonly-cell" :title="cell">{{ cell }}</div>
                                                         </td>
                                                     </tr>
                                                     <tr v-if="!paginatedResultRows.length">
-                                                        <td class="preview-empty-row" :colspan="resultTableHeaders.length + 2">
-                                                            Nenhuma linha nesta pagina.
+                                                        <td class="preview-empty-row" :colspan="resultTableColspan">
+                                                            {{ state.resultSearch.trim() ? 'Nenhuma linha encontrada na busca.' : 'Nenhuma linha nesta pagina.' }}
                                                         </td>
                                                     </tr>
                                                 </tbody>
@@ -1126,6 +1325,99 @@
                             </div>
                         </div>
                     </section>
+                </div>
+
+                <div
+                    v-if="state.compareDetailOpen && compareDetailContent"
+                    class="compare-detail-backdrop"
+                    @click.self="closeCompareDetail"
+                >
+                    <div class="compare-detail-modal panel-card" role="dialog" aria-modal="true" aria-labelledby="compare-detail-title">
+                        <div class="card-body p-4">
+                            <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
+                                <div>
+                                    <div class="editor-label mb-1">Em comum</div>
+                                    <h2 id="compare-detail-title" class="h5 mb-0">Detalhes da comparacao</h2>
+                                </div>
+                                <button class="btn btn-outline-secondary btn-sm" type="button" @click="closeCompareDetail" aria-label="Fechar">
+                                    <i class="fas fa-times" aria-hidden="true"></i>
+                                </button>
+                            </div>
+
+                            <div class="status-chip info mb-3">
+                                <strong>Chave:</strong> {{ compareDetailContent.key }}
+                            </div>
+
+                            <div class="mb-4">
+                                <div class="small fw-semibold mb-2">Colunas usadas na comparacao</div>
+                                <div class="preview-table-wrap">
+                                    <table class="table table-sm preview-table compare-detail-pairs-table mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Lista A</th>
+                                                <th>Lista B</th>
+                                                <th>Valor A (bruto)</th>
+                                                <th>Valor B (bruto)</th>
+                                                <th>Normalizado A</th>
+                                                <th>Normalizado B</th>
+                                                <th>Resultado</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="(pair, pairIndex) in compareDetailContent.pairDetails" :key="'detail-pair-' + pairIndex">
+                                                <td class="compare-column-key">{{ pair.columnA }}</td>
+                                                <td class="compare-column-key">{{ pair.columnB }}</td>
+                                                <td>{{ pair.rawA }}</td>
+                                                <td>{{ pair.rawB }}</td>
+                                                <td>{{ pair.normalizedA }}</td>
+                                                <td>{{ pair.normalizedB }}</td>
+                                                <td>
+                                                    <span class="badge" :class="pair.matches ? 'text-bg-success' : 'text-bg-danger'">
+                                                        {{ pair.matches ? 'Igual' : 'Diferente' }}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="compare-detail-lists-grid">
+                                <div>
+                                    <div class="small fw-semibold mb-2">
+                                        Lista A
+                                        <span class="text-secondary" v-if="compareDetailContent.rowIndexA != null">(linha {{ compareDetailContent.rowIndexA + 1 }})</span>
+                                    </div>
+                                    <div class="preview-table-wrap">
+                                        <table class="table table-sm preview-table mb-0">
+                                            <tbody>
+                                                <tr v-for="(field, fieldIndex) in compareDetailContent.listA" :key="'detail-a-' + fieldIndex" :class="{ 'compare-column-key': field.isCompareColumn }">
+                                                    <th class="compare-detail-field-name">{{ field.header }}</th>
+                                                    <td><div class="compare-readonly-cell compare-detail-value">{{ field.value }}</div></td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="small fw-semibold mb-2">
+                                        Lista B
+                                        <span class="text-secondary" v-if="compareDetailContent.rowIndexB != null">(linha {{ compareDetailContent.rowIndexB + 1 }})</span>
+                                    </div>
+                                    <div class="preview-table-wrap">
+                                        <table class="table table-sm preview-table mb-0">
+                                            <tbody>
+                                                <tr v-for="(field, fieldIndex) in compareDetailContent.listB" :key="'detail-b-' + fieldIndex" :class="{ 'compare-column-key': field.isCompareColumn }">
+                                                    <th class="compare-detail-field-name">{{ field.header }}</th>
+                                                    <td><div class="compare-readonly-cell compare-detail-value">{{ field.value }}</div></td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="toast-stack" aria-live="polite" aria-atomic="true">
