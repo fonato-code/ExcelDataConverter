@@ -4,6 +4,134 @@
     const inputConfig = window.ExcelConverterInputConfig || [];
     const inputFormats = window.ExcelConverterInputFormats || [];
     const inputParsers = window.ExcelConverterInputParsers || {};
+    const outputFormats = window.ExcelConverterOutputFormats || [];
+    const outputBuilders = window.ExcelConverterOutputBuilders || {};
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function formatCellForHtml(value) {
+        return escapeHtml(value).replace(/\r?\n/g, "<br>");
+    }
+
+    function escapeSqlString(value) {
+        return String(value).replace(/'/g, "''");
+    }
+
+    function escapePhpString(value) {
+        return String(value)
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, "\\\"");
+    }
+
+    function escapeXml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&apos;");
+    }
+
+    function sanitizeSqlIdentifier(value) {
+        const sanitized = String(value).replace(/[^A-Za-z0-9_]/g, "_");
+        return sanitized || "column";
+    }
+
+    function sanitizeXmlTagName(value, fallback) {
+        const sanitized = String(value).replace(/[^A-Za-z0-9_.-]/g, "_");
+        const valid = /^[A-Za-z_]/.test(sanitized) ? sanitized : fallback;
+        return valid || fallback;
+    }
+
+    function isNumericValue(value) {
+        return typeof value === "number" && Number.isFinite(value);
+    }
+
+    function buildObjectsFromRows(rows, headers) {
+        return rows.map(function (row) {
+            return headers.reduce(function (record, header, index) {
+                record[header] = index < row.length ? row[index] : "";
+                return record;
+            }, {});
+        });
+    }
+
+    function buildOutput(format, headers, rows, options) {
+        const builder = outputBuilders[format];
+        if (!builder) {
+            return "";
+        }
+
+        return builder({
+            headers: headers,
+            rows: rows,
+            columns: options.columns || [],
+            options: options,
+            utils: {
+                buildObjectsFromRows: buildObjectsFromRows,
+                formatCellForHtml: formatCellForHtml,
+                escapeSqlString: escapeSqlString,
+                escapePhpString: escapePhpString,
+                escapeXml: escapeXml,
+                sanitizeSqlIdentifier: sanitizeSqlIdentifier,
+                sanitizeXmlTagName: sanitizeXmlTagName,
+                isNumericValue: isNumericValue
+            }
+        });
+    }
+
+    function getOutputFileExtension(format) {
+        const extensionMap = {
+            json: "json",
+            "json-column-arrays": "json",
+            "json-row-arrays": "json",
+            "json-dictionary": "json",
+            ndjson: "ndjson",
+            yaml: "yaml",
+            "markdown-table": "md",
+            "html-table": "html",
+            sql: "sql",
+            php: "php",
+            "xml-properties": "xml",
+            "xml-nodes": "xml",
+            avro: "json",
+            csv: "csv",
+            tsv: "tsv"
+        };
+
+        return extensionMap[format] || "txt";
+    }
+
+    function getCompareExportTabSlug(tab) {
+        if (tab === "onlyA") {
+            return "so-a";
+        }
+
+        if (tab === "onlyB") {
+            return "so-b";
+        }
+
+        return "em-comum";
+    }
+
+    function getCompareExportTabLabel(tab) {
+        if (tab === "onlyA") {
+            return "So A";
+        }
+
+        if (tab === "onlyB") {
+            return "So B";
+        }
+
+        return "Em comum";
+    }
 
     function normalizeHeader(value, index, transform) {
         const fallback = "column_" + (index + 1);
@@ -258,6 +386,17 @@
                 resultSearch: "",
                 compareDetailOpen: false,
                 compareDetailSourceIndex: -1,
+                outputFormat: "json",
+                sqlTableName: "ExcelConverter",
+                sqlAddCreateTable: true,
+                sqlAddIdentityInsert: false,
+                sqlAddTransaction: false,
+                sqlAddTruncate: false,
+                sqlConvertEmptyToNull: false,
+                sqlInsertBatchSize: 1000,
+                xmlRootTagName: "rows",
+                xmlRowTagName: "row",
+                copyFeedback: "",
                 toasts: []
             };
 
@@ -325,7 +464,9 @@
                     optionsSectionCollapsed: state.optionsSectionCollapsed,
                     resultsSectionCollapsed: state.resultsSectionCollapsed,
                     activeResultTab: state.activeResultTab,
-                    resultPageSize: state.resultPageSize
+                    resultPageSize: state.resultPageSize,
+                    outputFormat: state.outputFormat,
+                    sqlTableName: state.sqlTableName
                 };
             }, function (preferences) {
                 window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
@@ -769,6 +910,92 @@
                 return resultTableHeaders.value.length + 2 + (state.activeResultTab === "both" ? 1 : 0);
             });
 
+            const compareExportPayload = computed(function () {
+                if (!comparisonResult.value.ready || !resultTableRows.value.length || !resultTableHeaders.value.length) {
+                    return {
+                        headers: [],
+                        rows: [],
+                        columns: []
+                    };
+                }
+
+                const headers = resultTableHeaders.value.slice();
+                const rows = resultTableRows.value.map(function (rowItem) {
+                    return rowItem.cells.slice();
+                });
+                const columns = headers.map(function (header, index) {
+                    return {
+                        key: "compare_col_" + index,
+                        header: header,
+                        sourceIndex: index,
+                        enabled: true,
+                        outputName: header,
+                        sqlType: "",
+                        avroType: ""
+                    };
+                });
+
+                return {
+                    headers: headers,
+                    rows: rows,
+                    columns: columns
+                };
+            });
+
+            const isSqlOutput = computed(function () {
+                const selectedFormat = outputFormats.find(function (format) {
+                    return format.value === state.outputFormat;
+                });
+                return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.sql);
+            });
+
+            const compareExportTabLabel = computed(function () {
+                return getCompareExportTabLabel(state.activeResultTab);
+            });
+
+            const compareOutputResult = computed(function () {
+                const payload = compareExportPayload.value;
+
+                if (!payload.headers.length || !payload.rows.length) {
+                    return {
+                        text: "",
+                        error: comparisonResult.value.ready
+                            ? "Nao ha linhas para exportar na guia " + compareExportTabLabel.value + "."
+                            : ""
+                    };
+                }
+
+                const exportOptions = {
+                    columns: payload.columns,
+                    sqlTableName: state.sqlTableName,
+                    addCreateTable: state.sqlAddCreateTable,
+                    addIdentityInsert: state.sqlAddIdentityInsert,
+                    addTransaction: state.sqlAddTransaction,
+                    addTruncate: state.sqlAddTruncate,
+                    convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlInsertBatchSize: state.sqlInsertBatchSize,
+                    xmlRootTagName: state.xmlRootTagName,
+                    xmlRowTagName: state.xmlRowTagName
+                };
+
+                try {
+                    return {
+                        text: buildOutput(
+                            state.outputFormat,
+                            payload.headers,
+                            payload.rows,
+                            exportOptions
+                        ),
+                        error: ""
+                    };
+                } catch (error) {
+                    return {
+                        text: "",
+                        error: error && error.message ? error.message : "Erro ao gerar exportacao."
+                    };
+                }
+            });
+
             function goToResultPage(page) {
                 state.resultPage = Math.max(1, Math.min(resultPageCount.value, page));
             }
@@ -789,6 +1016,63 @@
                 state.compareDetailOpen = false;
                 state.compareDetailSourceIndex = -1;
             }
+
+            async function writeCompareOutputToClipboard() {
+                const text = compareOutputResult.value.text;
+                if (!text) {
+                    state.copyFeedback = "Sem conteudo";
+                    pushToast(compareOutputResult.value.error || "Nao ha conteudo para copiar.", "warning");
+                    return;
+                }
+
+                if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+                    pushToast("Copia para a area de transferencia nao disponivel neste browser.", "danger");
+                    return;
+                }
+
+                try {
+                    await navigator.clipboard.writeText(text);
+                    state.copyFeedback = "Copiado";
+                    pushToast("Exportacao copiada (" + compareExportTabLabel.value + ").", "success");
+                } catch (_error) {
+                    state.copyFeedback = "Falha ao copiar";
+                    pushToast("Falha ao copiar para a area de transferencia.", "danger");
+                }
+
+                window.setTimeout(function () {
+                    state.copyFeedback = "";
+                }, 1600);
+            }
+
+            function downloadCompareOutput() {
+                const content = compareOutputResult.value.text;
+                if (!content) {
+                    pushToast(compareOutputResult.value.error || "Nao ha conteudo para baixar.", "warning");
+                    return;
+                }
+
+                const extension = getOutputFileExtension(state.outputFormat);
+                const slug = getCompareExportTabSlug(state.activeResultTab);
+                const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement("a");
+
+                link.href = url;
+                link.download = "excelconverter-comparacao-" + slug + "." + extension;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+                pushToast("Arquivo gerado (" + compareExportTabLabel.value + ").", "success");
+            }
+
+            watch(function () {
+                return compareOutputResult.value.error;
+            }, function (message, previousMessage) {
+                if (message && message !== previousMessage) {
+                    pushToast(message, "danger");
+                }
+            });
 
             watch(function () {
                 return state.activeResultTab + "|" + state.resultPageSize + "|" + filteredResultTableRows.value.length;
@@ -949,6 +1233,12 @@
                 resultRangeLabel,
                 resultTableColspan,
                 compareDetailContent,
+                outputFormats,
+                isSqlOutput,
+                compareExportTabLabel,
+                compareOutputResult,
+                writeCompareOutputToClipboard,
+                downloadCompareOutput,
                 goToResultPage,
                 setActiveResultTab,
                 openCompareDetail,
@@ -1173,9 +1463,41 @@
                                     <div class="editor-label mb-1">Resultado</div>
                                     <h2 class="h5 mb-0">Comparacao</h2>
                                 </div>
-                                <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="state.resultsSectionCollapsed = !state.resultsSectionCollapsed">
-                                    <i :class="state.resultsSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
-                                </button>
+                                <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end flex-grow-1 output-header-actions">
+                                    <div
+                                        v-if="comparisonResult.ready && resultTableRows.length"
+                                        class="input-group input-group-sm output-toolbar-group"
+                                    >
+                                        <template v-if="isSqlOutput">
+                                            <label class="input-group-text mb-0 small d-none d-md-inline" for="compare-output-sql-table-name">Tabela</label>
+                                            <input
+                                                id="compare-output-sql-table-name"
+                                                class="form-control output-sql-table-input"
+                                                v-model="state.sqlTableName"
+                                                placeholder="ExcelConverter"
+                                                title="Nome da tabela SQL"
+                                            >
+                                        </template>
+                                        <label class="input-group-text mb-0 small d-none d-lg-inline" for="compare-output-format-select">Formato</label>
+                                        <select id="compare-output-format-select" class="form-select output-format-select" v-model="state.outputFormat">
+                                            <option v-for="format in outputFormats" :key="format.value" :value="format.value">
+                                                {{ format.label }}
+                                            </option>
+                                        </select>
+                                        <button class="btn btn-outline-primary" type="button" @click="writeCompareOutputToClipboard" :title="state.copyFeedback || ('Copiar guia ' + compareExportTabLabel)">
+                                            <i
+                                                :class="state.copyFeedback === 'Copiado' ? 'fas fa-check' : state.copyFeedback === 'Falha ao copiar' ? 'fas fa-exclamation-triangle' : state.copyFeedback === 'Sem conteudo' ? 'fas fa-ban' : 'fas fa-copy'"
+                                                aria-hidden="true"
+                                            ></i>
+                                        </button>
+                                        <button class="btn btn-outline-primary" type="button" @click="downloadCompareOutput" :title="'Baixar guia ' + compareExportTabLabel">
+                                            <i class="fas fa-download" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm section-toggle-btn border-0" type="button" @click="state.resultsSectionCollapsed = !state.resultsSectionCollapsed">
+                                        <i :class="state.resultsSectionCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
+                                    </button>
+                                </div>
                             </div>
 
                             <div v-if="!state.resultsSectionCollapsed">
@@ -1320,6 +1642,23 @@
                                         <template v-if="state.activeResultTab === 'onlyA'">Nenhum registro exclusivo na Lista A.</template>
                                         <template v-else-if="state.activeResultTab === 'onlyB'">Nenhum registro exclusivo na Lista B.</template>
                                         <template v-else>Nenhum registro em comum com os criterios actuais.</template>
+                                    </div>
+
+                                    <div v-if="resultTableRows.length" class="compare-export-panel mt-4">
+                                        <div class="editor-label mb-2">Exportacao</div>
+                                        <div class="small text-secondary mb-2">
+                                            Exporta apenas a guia <strong>{{ compareExportTabLabel }}</strong> ({{ resultTableRows.length }} linha(s), {{ resultTableHeaders.length }} coluna(s)). Colunas # e Chave nao sao incluidas.
+                                        </div>
+                                        <div v-if="compareOutputResult.error" class="alert alert-danger py-2 px-3 mb-2 small" role="alert">
+                                            {{ compareOutputResult.error }}
+                                        </div>
+                                        <textarea
+                                            class="form-control editor-textarea compare-export-textarea"
+                                            :value="compareOutputResult.text"
+                                            readonly
+                                            spellcheck="false"
+                                            placeholder="O resultado exportado da guia seleccionada aparecera aqui"
+                                        ></textarea>
                                     </div>
                                 </template>
                             </div>
