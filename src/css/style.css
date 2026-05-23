@@ -369,6 +369,10 @@ html {
     padding-top: 1.25rem;
 }
 
+.compare-export-panel-head {
+    cursor: pointer;
+}
+
 .compare-export-textarea {
     min-height: clamp(10rem, 24vh, 16rem);
 }

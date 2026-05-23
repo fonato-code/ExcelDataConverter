@@ -397,6 +397,7 @@
                 xmlRootTagName: "rows",
                 xmlRowTagName: "row",
                 copyFeedback: "",
+                exportPreviewCollapsed: true,
                 toasts: []
             };
 
@@ -466,7 +467,8 @@
                     activeResultTab: state.activeResultTab,
                     resultPageSize: state.resultPageSize,
                     outputFormat: state.outputFormat,
-                    sqlTableName: state.sqlTableName
+                    sqlTableName: state.sqlTableName,
+                    exportPreviewCollapsed: state.exportPreviewCollapsed
                 };
             }, function (preferences) {
                 window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
@@ -1115,6 +1117,10 @@
                 state[listKey].sectionCollapsed = !state[listKey].sectionCollapsed;
             }
 
+            function toggleExportPreview() {
+                state.exportPreviewCollapsed = !state.exportPreviewCollapsed;
+            }
+
             function addColumnPair() {
                 state.columnPairs.push({
                     id: createPairId(),
@@ -1245,6 +1251,7 @@
                 closeCompareDetail,
                 toggleTheme,
                 toggleListSection,
+                toggleExportPreview,
                 addColumnPair,
                 removeColumnPair,
                 moveColumnPair,
@@ -1645,20 +1652,35 @@
                                     </div>
 
                                     <div v-if="resultTableRows.length" class="compare-export-panel mt-4">
-                                        <div class="editor-label mb-2">Exportacao</div>
-                                        <div class="small text-secondary mb-2">
-                                            Exporta apenas a guia <strong>{{ compareExportTabLabel }}</strong> ({{ resultTableRows.length }} linha(s), {{ resultTableHeaders.length }} coluna(s)). Colunas # e Chave nao sao incluidas.
+                                        <div class="d-flex align-items-center justify-content-between gap-3 mb-2">
+                                            <div class="compare-export-panel-head" @click="toggleExportPreview">
+                                                <div class="editor-label mb-1">Visualizar</div>
+                                                <h3 class="h6 mb-0">Visualizar Exportacao</h3>
+                                            </div>
+                                            <button
+                                                class="btn btn-outline-secondary btn-sm section-toggle-btn border-0"
+                                                type="button"
+                                                @click="toggleExportPreview"
+                                                :title="state.exportPreviewCollapsed ? 'Expandir visualizacao' : 'Minimizar visualizacao'"
+                                            >
+                                                <i :class="state.exportPreviewCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up'" aria-hidden="true"></i>
+                                            </button>
                                         </div>
-                                        <div v-if="compareOutputResult.error" class="alert alert-danger py-2 px-3 mb-2 small" role="alert">
-                                            {{ compareOutputResult.error }}
-                                        </div>
-                                        <textarea
-                                            class="form-control editor-textarea compare-export-textarea"
-                                            :value="compareOutputResult.text"
-                                            readonly
-                                            spellcheck="false"
-                                            placeholder="O resultado exportado da guia seleccionada aparecera aqui"
-                                        ></textarea>
+                                        <template v-if="!state.exportPreviewCollapsed">
+                                            <div class="small text-secondary mb-2">
+                                                Exporta apenas a guia <strong>{{ compareExportTabLabel }}</strong> ({{ resultTableRows.length }} linha(s), {{ resultTableHeaders.length }} coluna(s)). Colunas # e Chave nao sao incluidas.
+                                            </div>
+                                            <div v-if="compareOutputResult.error" class="alert alert-danger py-2 px-3 mb-2 small" role="alert">
+                                                {{ compareOutputResult.error }}
+                                            </div>
+                                            <textarea
+                                                class="form-control editor-textarea compare-export-textarea"
+                                                :value="compareOutputResult.text"
+                                                readonly
+                                                spellcheck="false"
+                                                placeholder="O resultado exportado da guia seleccionada aparecera aqui"
+                                            ></textarea>
+                                        </template>
                                     </div>
                                 </template>
                             </div>
