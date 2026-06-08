@@ -142,7 +142,8 @@
             return Object.assign({}, defaultState, saved, {
                 list: Object.assign({}, defaultState.list, saved.list || {}),
                 groupColumns: Array.isArray(saved.groupColumns) ? saved.groupColumns : defaultState.groupColumns,
-                ignoredColumns: Array.isArray(saved.ignoredColumns) ? saved.ignoredColumns : defaultState.ignoredColumns
+                ignoredColumns: Array.isArray(saved.ignoredColumns) ? saved.ignoredColumns : defaultState.ignoredColumns,
+                excludedRowKeys: Array.isArray(saved.excludedRowKeys) ? saved.excludedRowKeys : defaultState.excludedRowKeys
             });
         } catch (_error) {
             return defaultState;
@@ -357,6 +358,9 @@
                 resultPage: 1,
                 resultPageSize: 100,
                 resultSearch: "",
+                previewSortColumnKey: "",
+                previewSortDirection: "none",
+                excludedRowKeys: [],
                 outputFormat: "json",
                 sqlTableName: "ExcelConverter",
                 sqlAddCreateTable: true,
@@ -433,6 +437,9 @@
                     optionsSectionCollapsed: state.optionsSectionCollapsed,
                     resultsSectionCollapsed: state.resultsSectionCollapsed,
                     resultPageSize: state.resultPageSize,
+                    previewSortColumnKey: state.previewSortColumnKey,
+                    previewSortDirection: state.previewSortDirection,
+                    excludedRowKeys: state.excludedRowKeys,
                     outputFormat: state.outputFormat,
                     sqlTableName: state.sqlTableName,
                     exportPreviewCollapsed: state.exportPreviewCollapsed
@@ -594,6 +601,7 @@
                     Object.keys(selectedValues).forEach(function (key) {
                         delete selectedValues[key];
                     });
+                    state.excludedRowKeys = [];
                     return;
                 }
 
@@ -626,6 +634,10 @@
                     if (!activeKeys.has(key)) {
                         delete selectedValues[key];
                     }
+                });
+
+                state.excludedRowKeys = state.excludedRowKeys.filter(function (rowKey) {
+                    return activeKeys.has(rowKey);
                 });
             });
 
@@ -661,9 +673,62 @@
                 });
             });
 
+            function getPreviewRowCellValue(rowItem, header) {
+                const groupIndex = validGroupColumns.value.indexOf(header);
+                if (groupIndex !== -1) {
+                    return rowItem.groupCells[groupIndex];
+                }
+
+                const valueIndex = valueColumns.value.indexOf(header);
+                if (valueIndex !== -1) {
+                    return rowItem.valueCells[valueIndex].value;
+                }
+
+                return "";
+            }
+
+            const sortedPreviewRows = computed(function () {
+                const rows = previewRows.value.slice();
+
+                if (state.previewSortDirection === "none" || !state.previewSortColumnKey) {
+                    return rows;
+                }
+
+                const sortHeader = state.previewSortColumnKey;
+
+                return rows.sort(function (left, right) {
+                    const leftValue = String(getPreviewRowCellValue(left, sortHeader) || "").toLowerCase();
+                    const rightValue = String(getPreviewRowCellValue(right, sortHeader) || "").toLowerCase();
+
+                    if (leftValue < rightValue) {
+                        return state.previewSortDirection === "asc" ? -1 : 1;
+                    }
+
+                    if (leftValue > rightValue) {
+                        return state.previewSortDirection === "asc" ? 1 : -1;
+                    }
+
+                    return 0;
+                });
+            });
+
+            const activePreviewRows = computed(function () {
+                return sortedPreviewRows.value.filter(function (rowItem) {
+                    return state.excludedRowKeys.indexOf(rowItem.key) === -1;
+                });
+            });
+
+            const excludedRowCount = computed(function () {
+                return state.excludedRowKeys.filter(function (rowKey) {
+                    return previewRows.value.some(function (rowItem) {
+                        return rowItem.key === rowKey;
+                    });
+                }).length;
+            });
+
             const filteredPreviewRows = computed(function () {
                 const search = state.resultSearch.trim().toLowerCase();
-                const rows = previewRows.value;
+                const rows = sortedPreviewRows.value;
 
                 if (!search) {
                     return rows;
@@ -721,7 +786,7 @@
             });
 
             const exportPayload = computed(function () {
-                if (!distinctResult.value.ready || !previewRows.value.length || !previewHeaders.value.length) {
+                if (!distinctResult.value.ready || !activePreviewRows.value.length || !previewHeaders.value.length) {
                     return {
                         headers: [],
                         rows: [],
@@ -730,7 +795,7 @@
                 }
 
                 const headers = previewHeaders.value.slice();
-                const rows = previewRows.value.map(function (rowItem) {
+                const rows = activePreviewRows.value.map(function (rowItem) {
                     const groupPart = rowItem.groupCells.slice();
                     const valuePart = rowItem.valueCells.map(function (cellItem) {
                         return formatCellValue(cellItem.value);
@@ -888,6 +953,48 @@
                 selectedValues[groupKey][columnName] = value;
             }
 
+            function cyclePreviewSort(header) {
+                if (state.previewSortColumnKey !== header) {
+                    state.previewSortColumnKey = header;
+                    state.previewSortDirection = "asc";
+                    state.resultPage = 1;
+                    return;
+                }
+
+                if (state.previewSortDirection === "asc") {
+                    state.previewSortDirection = "desc";
+                } else if (state.previewSortDirection === "desc") {
+                    state.previewSortDirection = "none";
+                    state.previewSortColumnKey = "";
+                } else {
+                    state.previewSortDirection = "asc";
+                }
+
+                state.resultPage = 1;
+            }
+
+            function getPreviewSortIcon(header) {
+                if (state.previewSortColumnKey !== header || state.previewSortDirection === "none") {
+                    return "fas fa-sort";
+                }
+
+                return state.previewSortDirection === "asc" ? "fas fa-sort-up" : "fas fa-sort-down";
+            }
+
+            function isRowExcluded(rowKey) {
+                return state.excludedRowKeys.indexOf(rowKey) !== -1;
+            }
+
+            function toggleRowExcluded(rowKey) {
+                const index = state.excludedRowKeys.indexOf(rowKey);
+                if (index === -1) {
+                    state.excludedRowKeys.push(rowKey);
+                    return;
+                }
+
+                state.excludedRowKeys.splice(index, 1);
+            }
+
             async function pasteListFromClipboard() {
                 if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
                     pushToast("Leitura da area de transferencia nao disponivel neste browser.", "danger");
@@ -1037,6 +1144,8 @@
                 previewHeaders,
                 distinctResult,
                 previewRows,
+                activePreviewRows,
+                excludedRowCount,
                 filteredPreviewRows,
                 paginatedPreviewRows,
                 resultPageCount,
@@ -1060,6 +1169,10 @@
                 isIgnoredColumn,
                 isGroupingColumn,
                 updateSelectedValue,
+                cyclePreviewSort,
+                getPreviewSortIcon,
+                isRowExcluded,
+                toggleRowExcluded,
                 pasteListFromClipboard,
                 dismissToast
             };
@@ -1295,8 +1408,12 @@
                                             <div class="compare-summary-label">Grupos distintos</div>
                                         </div>
                                         <div class="compare-summary-card">
-                                            <div class="compare-summary-value">{{ distinctResult.summary.valueColumns }}</div>
-                                            <div class="compare-summary-label">Colunas com selecao</div>
+                                            <div class="compare-summary-value">{{ activePreviewRows.length }}</div>
+                                            <div class="compare-summary-label">Linhas activas</div>
+                                        </div>
+                                        <div class="compare-summary-card" v-if="excludedRowCount">
+                                            <div class="compare-summary-value">{{ excludedRowCount }}</div>
+                                            <div class="compare-summary-label">Desconsideradas</div>
                                         </div>
                                     </div>
 
@@ -1325,38 +1442,66 @@
                                         </div>
                                         <div class="small text-secondary mb-2 px-1">{{ resultRangeLabel }}</div>
 
-                                        <div class="preview-table-wrap compare-result-table-wrap">
-                                            <table class="table table-sm align-middle mb-0 preview-table compare-result-table">
+                                        <div class="preview-table-wrap distinct-preview-table-wrap">
+                                            <table class="table table-sm align-middle mb-0 preview-table distinct-preview-table">
                                                 <thead>
                                                     <tr>
-                                                        <th class="compare-index-col">#</th>
+                                                        <th class="preview-actions-col distinct-index-col">
+                                                            <div class="preview-header-cell">
+                                                                <div class="input-group input-group-sm preview-column-group">
+                                                                    <span class="form-control form-control-sm preview-input preview-header-label">#</span>
+                                                                </div>
+                                                            </div>
+                                                        </th>
                                                         <th
                                                             v-for="(header, headerIndex) in previewHeaders"
                                                             :key="'preview-header-' + headerIndex"
                                                             :class="{ 'compare-column-key': validGroupColumns.indexOf(header) !== -1 }"
                                                         >
-                                                            {{ header }}
+                                                            <div class="preview-header-cell">
+                                                                <div class="input-group input-group-sm preview-column-group">
+                                                                    <span class="form-control form-control-sm preview-input preview-header-label" :title="header">{{ header }}</span>
+                                                                    <button class="btn btn-outline-secondary" type="button" @click="cyclePreviewSort(header)" title="Ordenar coluna">
+                                                                        <i :class="getPreviewSortIcon(header)" aria-hidden="true"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
                                                         </th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    <tr v-for="(rowItem, rowIndex) in paginatedPreviewRows" :key="'preview-row-' + rowIndex + '-' + rowItem.key">
-                                                        <td class="compare-index-col">
-                                                            <div class="form-control form-control-sm preview-input compare-readonly-cell">{{ ((state.resultPage - 1) * state.resultPageSize) + rowIndex + 1 }}</div>
+                                                    <tr
+                                                        v-for="(rowItem, rowIndex) in paginatedPreviewRows"
+                                                        :key="'preview-row-' + rowIndex + '-' + rowItem.key"
+                                                        :class="{ 'preview-row-hidden': isRowExcluded(rowItem.key) }"
+                                                    >
+                                                        <td class="preview-actions-col distinct-index-col">
+                                                            <div class="btn-group btn-group-sm preview-row-actions distinct-row-actions" role="group">
+                                                                <button
+                                                                    class="btn"
+                                                                    :class="isRowExcluded(rowItem.key) ? 'btn-outline-secondary' : 'btn-outline-success'"
+                                                                    type="button"
+                                                                    @click="toggleRowExcluded(rowItem.key)"
+                                                                    :title="isRowExcluded(rowItem.key) ? 'Incluir linha no export' : 'Desconsiderar linha no export'"
+                                                                >
+                                                                    <i :class="isRowExcluded(rowItem.key) ? 'fas fa-eye-slash' : 'fas fa-eye'" aria-hidden="true"></i>
+                                                                </button>
+                                                                <span class="form-control form-control-sm preview-input distinct-row-index">{{ ((state.resultPage - 1) * state.resultPageSize) + rowIndex + 1 }}</span>
+                                                            </div>
                                                         </td>
                                                         <td
                                                             v-for="(cell, cellIndex) in rowItem.groupCells"
                                                             :key="'group-cell-' + rowIndex + '-' + cellIndex"
                                                             class="compare-column-key"
                                                         >
-                                                            <div class="form-control form-control-sm preview-input compare-readonly-cell" :title="cell">{{ cell || '(null)' }}</div>
+                                                            <div class="form-control form-control-sm preview-input" :title="cell">{{ cell || '(null)' }}</div>
                                                         </td>
                                                         <td
                                                             v-for="(cellItem, cellIndex) in rowItem.valueCells"
                                                             :key="'value-cell-' + rowIndex + '-' + cellIndex"
                                                         >
                                                             <select
-                                                                class="form-select form-select-sm distinct-value-select"
+                                                                class="form-select form-select-sm preview-input distinct-value-select"
                                                                 :value="cellItem.value"
                                                                 @change="updateSelectedValue(rowItem.key, cellItem.column, $event.target.value)"
                                                             >
@@ -1415,7 +1560,7 @@
                                         </div>
                                         <template v-if="!state.exportPreviewCollapsed">
                                             <div class="small text-secondary mb-2">
-                                                Exporta {{ previewRows.length }} linha(s) distinta(s) com {{ previewHeaders.length }} coluna(s). Colunas ignoradas nao sao incluidas.
+                                                Exporta {{ activePreviewRows.length }} linha(s) activa(s) com {{ previewHeaders.length }} coluna(s). Linhas desconsideradas e colunas ignoradas nao sao incluidas.
                                             </div>
                                             <div v-if="distinctOutputResult.error" class="alert alert-danger py-2 px-3 mb-2 small" role="alert">
                                                 {{ distinctOutputResult.error }}
