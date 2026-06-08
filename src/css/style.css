@@ -225,6 +225,23 @@ html {
     gap: 0.25rem;
 }
 
+.group-column-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.distinct-ignored-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.5rem 1rem;
+}
+
+.distinct-value-select {
+    min-width: 6rem;
+}
+
 .compare-normalize-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
@@ -1120,7 +1137,8 @@ html {
         grid-template-columns: 1fr;
     }
 
-    .column-pair-row {
+    .column-pair-row,
+    .group-column-row {
         grid-template-columns: 1fr;
     }
 

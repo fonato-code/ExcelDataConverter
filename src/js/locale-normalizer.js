@@ -554,6 +554,7 @@
                             <a class="topbar-link" href="index.html">Conversor</a>
                             <a class="topbar-link is-active" href="locale-normalizer.html">Normalizacao</a>
                             <a class="topbar-link" href="compare-arrays.html">Comparar</a>
+                            <a class="topbar-link" href="distinct-list.html">Distintos</a>
                         </div>
                     </div>
                     <button class="theme-toggle" type="button" @click="toggleTheme" :title="state.theme === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'">
