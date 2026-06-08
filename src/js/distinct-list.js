@@ -1,5 +1,5 @@
 (function () {
-    const { createApp, computed, reactive, watch } = Vue;
+    const { createApp, computed, reactive, watch, onMounted, onBeforeUnmount } = Vue;
     const STORAGE_KEY = "excelconverter.distinct-list.preferences.v1";
     const inputConfig = window.ExcelConverterInputConfig || [];
     const inputFormats = window.ExcelConverterInputFormats || [];
@@ -349,6 +349,8 @@
                 headerTransform: "none",
                 groupColumns: [{ id: createGroupColumnId(), column: "" }],
                 ignoredColumns: [],
+                ignoredColumnsMenuOpen: false,
+                ignoredColumnsSearch: "",
                 ignoreLeadingZeros: false,
                 trim: true,
                 ignoreSpaces: false,
@@ -378,6 +380,22 @@
 
             const state = reactive(loadPreferences(defaultState));
             const selectedValues = reactive({});
+            const cellValueModes = reactive({});
+            const ignoredColumnsMenuStyle = reactive({
+                top: 0,
+                left: 0,
+                width: 280
+            });
+            const valueCellPicker = reactive({
+                open: false,
+                groupKey: "",
+                column: "",
+                top: 0,
+                left: 0,
+                width: 180,
+                options: []
+            });
+            let ignoredColumnsTriggerEl = null;
             let toastSeed = 0;
 
             function pushToast(message, tone) {
@@ -511,6 +529,67 @@
                 });
             });
 
+            const ignoredColumnChoices = computed(function () {
+                const search = state.ignoredColumnsSearch.trim().toLowerCase();
+
+                return parsedList.value.headers.filter(function (header) {
+                    if (!search) {
+                        return true;
+                    }
+
+                    return header.toLowerCase().indexOf(search) !== -1;
+                });
+            });
+
+            const ignoredColumnsLabel = computed(function () {
+                const count = state.ignoredColumns.length;
+
+                if (!count) {
+                    return "Nenhuma coluna ignorada";
+                }
+
+                if (count === 1) {
+                    return "1 coluna ignorada";
+                }
+
+                return count + " colunas ignoradas";
+            });
+
+            function getCellModeKey(groupKey, columnName) {
+                return String(groupKey) + "\x1f" + String(columnName);
+            }
+
+            function getCellValueMode(groupKey, columnName) {
+                return cellValueModes[getCellModeKey(groupKey, columnName)] || "list";
+            }
+
+            function setCellValueMode(groupKey, columnName, mode) {
+                cellValueModes[getCellModeKey(groupKey, columnName)] = mode;
+            }
+
+            function syncCellValueMode(groupKey, columnName, baseOptions) {
+                const current = selectedValues[groupKey]
+                    ? selectedValues[groupKey][columnName]
+                    : undefined;
+                const modeKey = getCellModeKey(groupKey, columnName);
+
+                if (current == null || current === undefined) {
+                    delete cellValueModes[modeKey];
+                    return;
+                }
+
+                if (cellValueModes[modeKey] === "custom") {
+                    return;
+                }
+
+                if (baseOptions.indexOf(current) === -1) {
+                    cellValueModes[modeKey] = "custom";
+                    return;
+                }
+
+                cellValueModes[modeKey] = "list";
+            }
+
             const previewHeaders = computed(function () {
                 return validGroupColumns.value.concat(valueColumns.value);
             });
@@ -601,7 +680,11 @@
                     Object.keys(selectedValues).forEach(function (key) {
                         delete selectedValues[key];
                     });
+                    Object.keys(cellValueModes).forEach(function (key) {
+                        delete cellValueModes[key];
+                    });
                     state.excludedRowKeys = [];
+                    closeValueCellPicker();
                     return;
                 }
 
@@ -620,13 +703,18 @@
                         const fallback = group.valueDefaults[columnName];
 
                         if (!options.length) {
-                            selectedValues[group.key][columnName] = "";
+                            if (current == null || current === undefined) {
+                                selectedValues[group.key][columnName] = "";
+                            }
+                            syncCellValueMode(group.key, columnName, options);
                             return;
                         }
 
-                        if (current == null || options.indexOf(current) === -1) {
+                        if (current == null || current === undefined) {
                             selectedValues[group.key][columnName] = fallback;
                         }
+
+                        syncCellValueMode(group.key, columnName, options);
                     });
                 });
 
@@ -652,7 +740,7 @@
                     });
 
                     const valueCells = valueColumns.value.map(function (columnName) {
-                        const options = group.valueOptions[columnName] || [];
+                        const options = (group.valueOptions[columnName] || []).slice();
                         const selected = selectedValues[group.key]
                             ? selectedValues[group.key][columnName]
                             : group.valueDefaults[columnName];
@@ -660,7 +748,8 @@
                         return {
                             column: columnName,
                             value: selected,
-                            options: options
+                            options: options,
+                            isCustom: getCellValueMode(group.key, columnName) === "custom"
                         };
                     });
 
@@ -928,6 +1017,10 @@
             }
 
             function toggleIgnoredColumn(header) {
+                if (isGroupingColumn(header)) {
+                    return;
+                }
+
                 const index = state.ignoredColumns.indexOf(header);
                 if (index === -1) {
                     state.ignoredColumns.push(header);
@@ -935,6 +1028,101 @@
                 }
 
                 state.ignoredColumns.splice(index, 1);
+            }
+
+            function toggleIgnoredColumnsMenu(event) {
+                if (state.ignoredColumnsMenuOpen) {
+                    closeIgnoredColumnsMenu();
+                    return;
+                }
+
+                const trigger = event && event.currentTarget instanceof Element
+                    ? event.currentTarget
+                    : ignoredColumnsTriggerEl;
+
+                if (!(trigger instanceof Element)) {
+                    return;
+                }
+
+                ignoredColumnsTriggerEl = trigger;
+                const rect = trigger.getBoundingClientRect();
+                ignoredColumnsMenuStyle.top = rect.bottom + 6;
+                ignoredColumnsMenuStyle.left = rect.left;
+                ignoredColumnsMenuStyle.width = Math.max(rect.width, 280);
+                state.ignoredColumnsMenuOpen = true;
+            }
+
+            function closeIgnoredColumnsMenu() {
+                state.ignoredColumnsMenuOpen = false;
+                state.ignoredColumnsSearch = "";
+            }
+
+            function getIgnoredColumnsMenuStyle() {
+                return {
+                    position: "fixed",
+                    top: ignoredColumnsMenuStyle.top + "px",
+                    left: ignoredColumnsMenuStyle.left + "px",
+                    width: ignoredColumnsMenuStyle.width + "px",
+                    maxHeight: "18rem",
+                    zIndex: 1070
+                };
+            }
+
+            function closeValueCellPicker() {
+                valueCellPicker.open = false;
+                valueCellPicker.groupKey = "";
+                valueCellPicker.column = "";
+                valueCellPicker.options = [];
+            }
+
+            function openValueCellPicker(groupKey, columnName, options, event) {
+                const trigger = event && event.currentTarget instanceof Element
+                    ? event.currentTarget
+                    : null;
+
+                if (!(trigger instanceof Element)) {
+                    return;
+                }
+
+                const rect = trigger.getBoundingClientRect();
+                valueCellPicker.open = true;
+                valueCellPicker.groupKey = groupKey;
+                valueCellPicker.column = columnName;
+                valueCellPicker.top = rect.bottom + 4;
+                valueCellPicker.left = rect.left;
+                valueCellPicker.width = Math.max(rect.width, 160);
+                valueCellPicker.options = options.slice();
+                closeIgnoredColumnsMenu();
+            }
+
+            function getValueCellPickerStyle() {
+                return {
+                    position: "fixed",
+                    top: valueCellPicker.top + "px",
+                    left: valueCellPicker.left + "px",
+                    width: valueCellPicker.width + "px",
+                    maxHeight: "14rem",
+                    zIndex: 1070
+                };
+            }
+
+            function handleGlobalOutsideClick(event) {
+                const target = event.target;
+                if (!(target instanceof Element)) {
+                    return;
+                }
+
+                if (state.ignoredColumnsMenuOpen) {
+                    if (!target.closest(".distinct-multiselect-wrap") && !target.closest(".distinct-multiselect-panel")) {
+                        closeIgnoredColumnsMenu();
+                    }
+                }
+
+                if (valueCellPicker.open) {
+                    if (!target.closest(".distinct-value-cell") && !target.closest(".distinct-value-picker")) {
+                        closeValueCellPicker();
+                    }
+                }
             }
 
             function isIgnoredColumn(header) {
@@ -951,6 +1139,30 @@
                 }
 
                 selectedValues[groupKey][columnName] = value;
+            }
+
+            function selectListValue(groupKey, columnName, value) {
+                updateSelectedValue(groupKey, columnName, value);
+                setCellValueMode(groupKey, columnName, "list");
+                closeValueCellPicker();
+            }
+
+            function startCustomValue(groupKey, columnName) {
+                setCellValueMode(groupKey, columnName, "custom");
+                if (!selectedValues[groupKey]) {
+                    selectedValues[groupKey] = {};
+                }
+
+                if (selectedValues[groupKey][columnName] == null) {
+                    selectedValues[groupKey][columnName] = "";
+                }
+
+                closeValueCellPicker();
+            }
+
+            function updateCustomValue(groupKey, columnName, value) {
+                updateSelectedValue(groupKey, columnName, value);
+                setCellValueMode(groupKey, columnName, "custom");
             }
 
             function cyclePreviewSort(header) {
@@ -1133,6 +1345,14 @@
                 });
             });
 
+            onMounted(function () {
+                document.addEventListener("mousedown", handleGlobalOutsideClick);
+            });
+
+            onBeforeUnmount(function () {
+                document.removeEventListener("mousedown", handleGlobalOutsideClick);
+            });
+
             return {
                 state,
                 inputConfig,
@@ -1166,8 +1386,21 @@
                 removeGroupColumn,
                 moveGroupColumn,
                 toggleIgnoredColumn,
+                toggleIgnoredColumnsMenu,
+                closeIgnoredColumnsMenu,
+                getIgnoredColumnsMenuStyle,
+                ignoredColumnChoices,
+                ignoredColumnsLabel,
                 isIgnoredColumn,
                 isGroupingColumn,
+                getCellValueMode,
+                openValueCellPicker,
+                closeValueCellPicker,
+                getValueCellPickerStyle,
+                valueCellPicker,
+                selectListValue,
+                startCustomValue,
+                updateCustomValue,
                 updateSelectedValue,
                 cyclePreviewSort,
                 getPreviewSortIcon,
@@ -1310,18 +1543,15 @@
                                 <div class="mb-4" v-if="parsedList.headers.length">
                                     <div class="small fw-semibold mb-2">Colunas ignoradas</div>
                                     <div class="small text-secondary mb-2">Colunas ignoradas nao aparecem na previsualizacao nem no export.</div>
-                                    <div class="distinct-ignored-grid">
-                                        <div v-for="header in parsedList.headers" :key="'ignored-' + header" class="form-check">
-                                            <input
-                                                class="form-check-input"
-                                                type="checkbox"
-                                                :id="'ignored-' + header"
-                                                :checked="isIgnoredColumn(header)"
-                                                :disabled="isGroupingColumn(header)"
-                                                @change="toggleIgnoredColumn(header)"
-                                            >
-                                            <label class="form-check-label" :for="'ignored-' + header">{{ header }}</label>
-                                        </div>
+                                    <div class="distinct-multiselect-wrap">
+                                        <button
+                                            class="form-select form-select-sm distinct-multiselect-trigger text-start"
+                                            type="button"
+                                            @click="toggleIgnoredColumnsMenu($event)"
+                                            :aria-expanded="state.ignoredColumnsMenuOpen ? 'true' : 'false'"
+                                        >
+                                            {{ ignoredColumnsLabel }}
+                                        </button>
                                     </div>
                                 </div>
 
@@ -1500,19 +1730,32 @@
                                                             v-for="(cellItem, cellIndex) in rowItem.valueCells"
                                                             :key="'value-cell-' + rowIndex + '-' + cellIndex"
                                                         >
-                                                            <select
-                                                                class="form-select form-select-sm preview-input distinct-value-select"
-                                                                :value="cellItem.value"
-                                                                @change="updateSelectedValue(rowItem.key, cellItem.column, $event.target.value)"
-                                                            >
-                                                                <option
-                                                                    v-for="option in cellItem.options"
-                                                                    :key="'option-' + rowItem.key + '-' + cellItem.column + '-' + option"
-                                                                    :value="option"
+                                                            <div v-if="!cellItem.isCustom" class="distinct-value-cell" @click="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)">
+                                                                <div class="form-control form-control-sm preview-input distinct-value-display" :title="formatSelectLabel(cellItem.value)">
+                                                                    {{ formatSelectLabel(cellItem.value) }}
+                                                                </div>
+                                                                <button class="btn btn-sm btn-outline-secondary distinct-value-picker-btn" type="button" title="Escolher valor" @click.stop="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)">
+                                                                    <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                                                                </button>
+                                                            </div>
+                                                            <div v-else class="distinct-value-cell distinct-value-cell-custom">
+                                                                <input
+                                                                    class="form-control form-control-sm preview-input distinct-value-input"
+                                                                    :value="cellItem.value"
+                                                                    :title="formatSelectLabel(cellItem.value)"
+                                                                    placeholder="Novo valor"
+                                                                    spellcheck="false"
+                                                                    @input="updateCustomValue(rowItem.key, cellItem.column, $event.target.value)"
                                                                 >
-                                                                    {{ formatSelectLabel(option) }}
-                                                                </option>
-                                                            </select>
+                                                                <button
+                                                                    class="btn btn-sm btn-outline-secondary distinct-value-picker-btn"
+                                                                    type="button"
+                                                                    title="Escolher valor da lista"
+                                                                    @click.stop="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)"
+                                                                >
+                                                                    <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                                                                </button>
+                                                            </div>
                                                         </td>
                                                     </tr>
                                                     <tr v-if="!paginatedPreviewRows.length">
@@ -1579,6 +1822,71 @@
                         </div>
                     </section>
                 </div>
+
+                <teleport to="body">
+                    <div
+                        v-if="state.ignoredColumnsMenuOpen"
+                        class="distinct-multiselect-panel"
+                        :style="getIgnoredColumnsMenuStyle()"
+                        @click.stop
+                    >
+                        <div class="distinct-multiselect-search">
+                            <input
+                                class="form-control form-control-sm"
+                                v-model="state.ignoredColumnsSearch"
+                                placeholder="Buscar coluna"
+                                spellcheck="false"
+                            >
+                        </div>
+                        <div class="distinct-multiselect-options">
+                            <label
+                                v-for="header in ignoredColumnChoices"
+                                :key="'ignored-choice-' + header"
+                                class="distinct-multiselect-option"
+                                :class="{ 'is-disabled': isGroupingColumn(header) }"
+                            >
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    :checked="isIgnoredColumn(header)"
+                                    :disabled="isGroupingColumn(header)"
+                                    @change="toggleIgnoredColumn(header)"
+                                >
+                                <span class="distinct-multiselect-option-label" :title="header">{{ header }}</span>
+                                <span v-if="isGroupingColumn(header)" class="distinct-multiselect-option-note">agrupamento</span>
+                            </label>
+                            <div v-if="!ignoredColumnChoices.length" class="distinct-multiselect-empty">
+                                Nenhuma coluna encontrada.
+                            </div>
+                        </div>
+                    </div>
+                </teleport>
+
+                <teleport to="body">
+                    <div
+                        v-if="valueCellPicker.open"
+                        class="distinct-value-picker"
+                        :style="getValueCellPickerStyle()"
+                        @click.stop
+                    >
+                        <button
+                            v-for="option in valueCellPicker.options"
+                            :key="'picker-option-' + valueCellPicker.groupKey + '-' + valueCellPicker.column + '-' + option"
+                            class="distinct-value-picker-option"
+                            type="button"
+                            @click="selectListValue(valueCellPicker.groupKey, valueCellPicker.column, option)"
+                        >
+                            {{ formatSelectLabel(option) }}
+                        </button>
+                        <button
+                            class="distinct-value-picker-option distinct-value-picker-add"
+                            type="button"
+                            @click="startCustomValue(valueCellPicker.groupKey, valueCellPicker.column)"
+                        >
+                            + Adicionar novo valor
+                        </button>
+                    </div>
+                </teleport>
 
                 <div class="toast-stack" aria-live="polite" aria-atomic="true">
                     <div
