@@ -388,6 +388,7 @@
                 sqlAddTransaction: false,
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
+                sqlConvertNullTextToNull: false,
                 sqlInsertBatchSize: 1000,
                 xmlRootTagName: "rows",
                 xmlRowTagName: "row",
@@ -488,6 +489,15 @@
                     excludedRowKeys: state.excludedRowKeys,
                     outputFormat: state.outputFormat,
                     sqlTableName: state.sqlTableName,
+                    sqlAddCreateTable: state.sqlAddCreateTable,
+                    sqlAddIdentityInsert: state.sqlAddIdentityInsert,
+                    sqlAddTransaction: state.sqlAddTransaction,
+                    sqlAddTruncate: state.sqlAddTruncate,
+                    sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlConvertNullTextToNull: state.sqlConvertNullTextToNull,
+                    sqlInsertBatchSize: state.sqlInsertBatchSize,
+                    xmlRootTagName: state.xmlRootTagName,
+                    xmlRowTagName: state.xmlRowTagName,
                     exportPreviewCollapsed: state.exportPreviewCollapsed
                 };
             }, function (preferences) {
@@ -980,6 +990,13 @@
                 };
             });
 
+            const isXmlOutput = computed(function () {
+                const selectedFormat = outputFormats.find(function (format) {
+                    return format.value === state.outputFormat;
+                });
+                return !!(selectedFormat && selectedFormat.controls && selectedFormat.controls.xml);
+            });
+
             const isSqlOutput = computed(function () {
                 const selectedFormat = outputFormats.find(function (format) {
                     return format.value === state.outputFormat;
@@ -1007,6 +1024,7 @@
                     addTransaction: state.sqlAddTransaction,
                     addTruncate: state.sqlAddTruncate,
                     convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    convertNullTextToNull: state.sqlConvertNullTextToNull,
                     sqlInsertBatchSize: state.sqlInsertBatchSize,
                     xmlRootTagName: state.xmlRootTagName,
                     xmlRowTagName: state.xmlRowTagName
@@ -1627,6 +1645,7 @@
                 resultRangeLabel,
                 resultTableColspan,
                 outputFormats,
+                isXmlOutput,
                 isSqlOutput,
                 distinctOutputResult,
                 selectedValues,
@@ -1839,7 +1858,79 @@
                                         <label class="form-check-label" for="distinct-ignore-special">Ignorar caracteres especiais e acentuacao</label>
                                     </div>
                                 </div>
-                                <div class="small text-secondary mt-2">Estas opcoes afetam apenas a chave de agrupamento. Os valores exibidos e exportados permanecem originais.</div>
+                                <div class="small text-secondary mt-2 mb-4">Estas opcoes afetam apenas a chave de agrupamento. Os valores exibidos e exportados permanecem originais.</div>
+
+                                <div class="distinct-output-config">
+                                    <div class="small fw-semibold text-secondary mb-2">Exportacao</div>
+                                    <div class="mb-3">
+                                        <label class="form-label small fw-semibold" for="distinct-options-output-format">Formato de saida</label>
+                                        <select id="distinct-options-output-format" class="form-select form-select-sm" v-model="state.outputFormat">
+                                            <option v-for="format in outputFormats" :key="'options-output-' + format.value" :value="format.value">
+                                                {{ format.label }}
+                                            </option>
+                                        </select>
+                                    </div>
+
+                                    <template v-if="isXmlOutput">
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="distinct-xml-root-tag">Root Row Tag Name</label>
+                                            <input id="distinct-xml-root-tag" class="form-control form-control-sm" v-model="state.xmlRootTagName" placeholder="rows">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="distinct-xml-row-tag">Row Tag Name</label>
+                                            <input id="distinct-xml-row-tag" class="form-control form-control-sm" v-model="state.xmlRowTagName" placeholder="row">
+                                        </div>
+                                    </template>
+
+                                    <template v-if="isSqlOutput">
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="distinct-options-sql-table-name">Nome da tabela</label>
+                                            <input
+                                                id="distinct-options-sql-table-name"
+                                                class="form-control form-control-sm"
+                                                v-model="state.sqlTableName"
+                                                placeholder="ExcelConverter"
+                                            >
+                                        </div>
+                                        <div class="form-check form-switch">
+                                            <input id="distinct-sql-create-table" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlAddCreateTable">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-create-table">Adicionar CREATE TABLE</label>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input id="distinct-sql-identity-insert" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlAddIdentityInsert">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-identity-insert">Adicionar IDENTITY_INSERT</label>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input id="distinct-sql-transaction" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlAddTransaction">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-transaction">Adicionar TRANSACTION</label>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input id="distinct-sql-truncate" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlAddTruncate">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-truncate">Adicionar TRUNCATE</label>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input id="distinct-sql-empty-null" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlConvertEmptyToNull">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-empty-null">Converter valores vazios em NULL</label>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input id="distinct-sql-null-text-null" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlConvertNullTextToNull">
+                                            <label class="form-check-label fw-semibold" for="distinct-sql-null-text-null">Converter 'NULL' em NULL</label>
+                                        </div>
+                                        <div class="mt-3">
+                                            <label class="form-label small fw-semibold" for="distinct-sql-insert-batch-size">Linhas por INSERT (VALUES)</label>
+                                            <input
+                                                id="distinct-sql-insert-batch-size"
+                                                class="form-control form-control-sm"
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                v-model.number="state.sqlInsertBatchSize"
+                                                placeholder="1000"
+                                            >
+                                            <div class="small text-secondary mt-1">Cada comando INSERT tera no maximo este numero de linhas (padrao 1000).</div>
+                                        </div>
+                                    </template>
+                                </div>
                             </div>
                         </div>
                     </section>

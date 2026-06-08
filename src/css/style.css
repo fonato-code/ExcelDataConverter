@@ -190,6 +190,12 @@ html {
     gap: 0.75rem;
 }
 
+.distinct-output-config {
+    border-top: 1px solid var(--panel-border, rgba(255, 255, 255, 0.08));
+    padding-top: 1.25rem;
+    max-width: 28rem;
+}
+
 .compare-column-pairs {
     display: grid;
     gap: 0.65rem;

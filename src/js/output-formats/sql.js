@@ -30,12 +30,16 @@
         return "VARCHAR(255)";
     }
 
-    function isNullTextLiteral(value) {
-        return typeof value === "string" && value.trim().toLowerCase() === "null";
+    function isNullTextValue(value) {
+        return typeof value === "string" && value.trim().toUpperCase() === "NULL";
     }
 
-    function formatSqlValue(value, utils, convertEmptyToNull) {
-        if (convertEmptyToNull && (value === "" || isNullTextLiteral(value))) {
+    function formatSqlValue(value, utils, options) {
+        if (options.convertNullTextToNull && isNullTextValue(value)) {
+            return "NULL";
+        }
+
+        if (options.convertEmptyToNull && value === "") {
             return "NULL";
         }
 
@@ -69,7 +73,7 @@
             const chunk = rows.slice(offset, offset + batchSize);
             const values = chunk.map(function (row) {
                 return "\t(" + headers.map(function (_header, index) {
-                    return formatSqlValue(index < row.length ? row[index] : "", utils, options.convertEmptyToNull);
+                    return formatSqlValue(index < row.length ? row[index] : "", utils, options);
                 }).join(",") + ")";
             }).join(",\n");
 

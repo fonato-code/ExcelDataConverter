@@ -393,6 +393,7 @@
                 sqlAddTransaction: false,
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
+                sqlConvertNullTextToNull: false,
                 sqlInsertBatchSize: 1000,
                 xmlRootTagName: "rows",
                 xmlRowTagName: "row",
@@ -975,6 +976,7 @@
                     addTransaction: state.sqlAddTransaction,
                     addTruncate: state.sqlAddTruncate,
                     convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    convertNullTextToNull: state.sqlConvertNullTextToNull,
                     sqlInsertBatchSize: state.sqlInsertBatchSize,
                     xmlRootTagName: state.xmlRootTagName,
                     xmlRowTagName: state.xmlRowTagName

@@ -661,6 +661,7 @@
                 sqlAddTransaction: false,
                 sqlAddTruncate: false,
                 sqlConvertEmptyToNull: false,
+                sqlConvertNullTextToNull: false,
                 sqlInsertBatchSize: 1000,
                 standardHeaders: [],
                 standardRows: [],
@@ -736,6 +737,7 @@
                     sqlAddTransaction: state.sqlAddTransaction,
                     sqlAddTruncate: state.sqlAddTruncate,
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlConvertNullTextToNull: state.sqlConvertNullTextToNull,
                     sqlInsertBatchSize: state.sqlInsertBatchSize,
                     inputSectionCollapsed: state.inputSectionCollapsed,
                     previewSectionCollapsed: state.previewSectionCollapsed,
@@ -1471,6 +1473,7 @@
                     addTransaction: state.sqlAddTransaction,
                     addTruncate: state.sqlAddTruncate,
                     convertEmptyToNull: state.sqlConvertEmptyToNull,
+                    convertNullTextToNull: state.sqlConvertNullTextToNull,
                     sqlInsertBatchSize: state.sqlInsertBatchSize,
                     xmlRootTagName: state.xmlRootTagName,
                     xmlRowTagName: state.xmlRowTagName
@@ -1669,6 +1672,7 @@
                     sqlAddTransaction: state.sqlAddTransaction,
                     sqlAddTruncate: state.sqlAddTruncate,
                     sqlConvertEmptyToNull: state.sqlConvertEmptyToNull,
+                    sqlConvertNullTextToNull: state.sqlConvertNullTextToNull,
                     sqlInsertBatchSize: state.sqlInsertBatchSize,
                     inputSectionCollapsed: state.inputSectionCollapsed,
                     previewSectionCollapsed: state.previewSectionCollapsed,
@@ -1693,7 +1697,7 @@
                     "Formato saida: " + s.outputFormat,
                     "XML root / row: " + s.xmlRootTagName + " / " + s.xmlRowTagName,
                     "SQL tabela: " + s.sqlTableName,
-                    "SQL opcoes: CREATE " + (s.sqlAddCreateTable ? "sim" : "nao") + ", IDENTITY_INSERT " + (s.sqlAddIdentityInsert ? "sim" : "nao") + ", TRANSACTION " + (s.sqlAddTransaction ? "sim" : "nao") + ", TRUNCATE " + (s.sqlAddTruncate ? "sim" : "nao") + ", vazio->NULL " + (s.sqlConvertEmptyToNull ? "sim" : "nao") + ", linhas por INSERT " + s.sqlInsertBatchSize,
+                    "SQL opcoes: CREATE " + (s.sqlAddCreateTable ? "sim" : "nao") + ", IDENTITY_INSERT " + (s.sqlAddIdentityInsert ? "sim" : "nao") + ", TRANSACTION " + (s.sqlAddTransaction ? "sim" : "nao") + ", TRUNCATE " + (s.sqlAddTruncate ? "sim" : "nao") + ", vazio->NULL " + (s.sqlConvertEmptyToNull ? "sim" : "nao") + ", texto NULL->NULL " + (s.sqlConvertNullTextToNull ? "sim" : "nao") + ", linhas por INSERT " + s.sqlInsertBatchSize,
                     "Renomeacao em massa: " + s.bulkHeaderRenameMode + " | prefixo \"" + s.bulkHeaderRenamePrefix + "\" | sufixo \"" + s.bulkHeaderRenameSuffix + "\"",
                     "Sidebar: " + (s.sidebarOpen ? "aberta" : "fechada") + " (" + s.sidebarWidth + "px)"
                 ];
@@ -1721,6 +1725,7 @@
                     "sqlAddTransaction",
                     "sqlAddTruncate",
                     "sqlConvertEmptyToNull",
+                    "sqlConvertNullTextToNull",
                     "sqlInsertBatchSize",
                     "inputSectionCollapsed",
                     "previewSectionCollapsed",
@@ -3550,6 +3555,11 @@
                                         <div v-if="isSqlOutput" class="form-check form-switch mt-3">
                                             <input id="sql-empty-null" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlConvertEmptyToNull">
                                             <label class="form-check-label fw-semibold" for="sql-empty-null">Converter valores vazios em NULL</label>
+                                        </div>
+
+                                        <div v-if="isSqlOutput" class="form-check form-switch mt-3">
+                                            <input id="sql-null-text-null" class="form-check-input" type="checkbox" role="switch" v-model="state.sqlConvertNullTextToNull">
+                                            <label class="form-check-label fw-semibold" for="sql-null-text-null">Converter 'NULL' em NULL</label>
                                         </div>
 
                                         <div v-if="isSqlOutput" class="mt-3">
