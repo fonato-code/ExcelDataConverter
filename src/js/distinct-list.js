@@ -1,5 +1,5 @@
 (function () {
-    const { createApp, computed, reactive, watch, onMounted, onBeforeUnmount } = Vue;
+    const { createApp, computed, reactive, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
     const STORAGE_KEY = "excelconverter.distinct-list.preferences.v1";
     const inputConfig = window.ExcelConverterInputConfig || [];
     const inputFormats = window.ExcelConverterInputFormats || [];
@@ -48,6 +48,24 @@
         const sanitized = String(value).replace(/[^A-Za-z0-9_.-]/g, "_");
         const valid = /^[A-Za-z_]/.test(sanitized) ? sanitized : fallback;
         return valid || fallback;
+    }
+
+    function toSnakeCase(value) {
+        return String(value || "")
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+            .replace(/[^A-Za-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .replace(/_+/g, "_")
+            .toLowerCase();
+    }
+
+    function toCamelCase(value) {
+        const snake = toSnakeCase(value);
+        return snake.replace(/_([a-z0-9])/g, function (_match, character) {
+            return character.toUpperCase();
+        });
     }
 
     function isNumericValue(value) {
@@ -381,6 +399,7 @@
             const state = reactive(loadPreferences(defaultState));
             const selectedValues = reactive({});
             const cellValueModes = reactive({});
+            const cellValueReviewed = reactive({});
             const ignoredColumnsMenuStyle = reactive({
                 top: 0,
                 left: 0,
@@ -395,6 +414,15 @@
                 width: 180,
                 options: []
             });
+            const columnMenu = reactive({
+                open: false,
+                column: "",
+                top: 0,
+                left: 0,
+                width: 320,
+                maxHeight: 400
+            });
+            const bulkFillByColumn = reactive({});
             let ignoredColumnsTriggerEl = null;
             let toastSeed = 0;
 
@@ -567,6 +595,30 @@
                 cellValueModes[getCellModeKey(groupKey, columnName)] = mode;
             }
 
+            function markCellReviewed(groupKey, columnName) {
+                cellValueReviewed[getCellModeKey(groupKey, columnName)] = true;
+            }
+
+            function isCellReviewed(groupKey, columnName) {
+                return !!cellValueReviewed[getCellModeKey(groupKey, columnName)];
+            }
+
+            function getCellChevronClass(groupKey, columnName, options, isCustom) {
+                if (!options || options.length <= 1 || isCustom || isCellReviewed(groupKey, columnName)) {
+                    return "distinct-value-picker-btn-resolved";
+                }
+
+                return "distinct-value-picker-btn-attention";
+            }
+
+            function getCellChevronTitle(groupKey, columnName, options, isCustom) {
+                if (getCellChevronClass(groupKey, columnName, options, isCustom) === "distinct-value-picker-btn-attention") {
+                    return "Multiplos valores — escolha ou adicione um valor";
+                }
+
+                return "Valor confirmado";
+            }
+
             function syncCellValueMode(groupKey, columnName, baseOptions) {
                 const current = selectedValues[groupKey]
                     ? selectedValues[groupKey][columnName]
@@ -683,6 +735,9 @@
                     Object.keys(cellValueModes).forEach(function (key) {
                         delete cellValueModes[key];
                     });
+                    Object.keys(cellValueReviewed).forEach(function (key) {
+                        delete cellValueReviewed[key];
+                    });
                     state.excludedRowKeys = [];
                     closeValueCellPicker();
                     return;
@@ -721,6 +776,20 @@
                 Object.keys(selectedValues).forEach(function (key) {
                     if (!activeKeys.has(key)) {
                         delete selectedValues[key];
+                    }
+                });
+
+                const activeModeKeys = new Set();
+
+                distinctResult.value.groups.forEach(function (group) {
+                    valueColumns.value.forEach(function (columnName) {
+                        activeModeKeys.add(getCellModeKey(group.key, columnName));
+                    });
+                });
+
+                Object.keys(cellValueReviewed).forEach(function (modeKey) {
+                    if (!activeModeKeys.has(modeKey)) {
+                        delete cellValueReviewed[modeKey];
                     }
                 });
 
@@ -1049,6 +1118,7 @@
                 ignoredColumnsMenuStyle.top = rect.bottom + 6;
                 ignoredColumnsMenuStyle.left = rect.left;
                 ignoredColumnsMenuStyle.width = Math.max(rect.width, 280);
+                closeDistinctColumnMenu();
                 state.ignoredColumnsMenuOpen = true;
             }
 
@@ -1093,6 +1163,147 @@
                 valueCellPicker.width = Math.max(rect.width, 160);
                 valueCellPicker.options = options.slice();
                 closeIgnoredColumnsMenu();
+                closeDistinctColumnMenu();
+            }
+
+            function isValueColumn(header) {
+                return valueColumns.value.indexOf(header) !== -1;
+            }
+
+            function getBulkFillConfig(columnName) {
+                if (!bulkFillByColumn[columnName]) {
+                    bulkFillByColumn[columnName] = {
+                        bulkFillMode: "set",
+                        bulkFillValue: "",
+                        bulkFillAuxValue: "",
+                        bulkFillSequenceStart: "1",
+                        bulkFillSequenceStep: "1"
+                    };
+                }
+
+                return bulkFillByColumn[columnName];
+            }
+
+            function closeDistinctColumnMenu() {
+                columnMenu.open = false;
+                columnMenu.column = "";
+            }
+
+            function toggleDistinctColumnMenu(columnName, event) {
+                if (columnMenu.open && columnMenu.column === columnName) {
+                    closeDistinctColumnMenu();
+                    return;
+                }
+
+                const trigger = event && event.currentTarget instanceof Element
+                    ? event.currentTarget
+                    : null;
+
+                if (!(trigger instanceof Element)) {
+                    return;
+                }
+
+                closeIgnoredColumnsMenu();
+                closeValueCellPicker();
+
+                const rect = trigger.getBoundingClientRect();
+                const estimatedMenuHeight = columnMenu.maxHeight || 400;
+                const estimatedMenuWidth = columnMenu.width || 320;
+                const openBelowTop = rect.bottom + 8;
+                const openAboveTop = rect.top - estimatedMenuHeight - 8;
+                const shouldOpenAbove = openBelowTop + estimatedMenuHeight > window.innerHeight - 16 && rect.top > window.innerHeight * 0.35;
+
+                columnMenu.top = shouldOpenAbove
+                    ? Math.max(16, openAboveTop)
+                    : Math.max(16, Math.min(window.innerHeight - 24, openBelowTop));
+                columnMenu.left = Math.max(16, Math.min(window.innerWidth - estimatedMenuWidth - 16, rect.right - (estimatedMenuWidth - 32)));
+                columnMenu.maxHeight = Math.max(220, window.innerHeight - columnMenu.top - 16);
+                columnMenu.open = true;
+                columnMenu.column = columnName;
+            }
+
+            function getDistinctColumnMenuStyle() {
+                return {
+                    position: "fixed",
+                    top: columnMenu.top + "px",
+                    left: columnMenu.left + "px",
+                    width: columnMenu.width + "px",
+                    maxHeight: columnMenu.maxHeight + "px",
+                    zIndex: 1070
+                };
+            }
+
+            function applyDistinctBulkFill(columnName) {
+                const config = getBulkFillConfig(columnName);
+                const targetRows = filteredPreviewRows.value.filter(function (row) {
+                    return !isRowExcluded(row.key);
+                });
+
+                if (config.bulkFillMode === "numeric-sequence") {
+                    const start = Number(config.bulkFillSequenceStart);
+                    const step = Number(config.bulkFillSequenceStep);
+
+                    if (!Number.isFinite(start) || !Number.isFinite(step)) {
+                        pushToast("Informe valor inicial e incremento numericos.", "warning");
+                        return;
+                    }
+
+                    targetRows.forEach(function (rowItem, sequenceIndex) {
+                        const nextValue = String(start + (step * sequenceIndex));
+                        updateSelectedValue(rowItem.key, columnName, nextValue);
+                        setCellValueMode(rowItem.key, columnName, "custom");
+                        markCellReviewed(rowItem.key, columnName);
+                    });
+
+                    pushToast("Sequencia numerica aplicada na coluna.", "success");
+                    closeDistinctColumnMenu();
+                    return;
+                }
+
+                targetRows.forEach(function (rowItem) {
+                    const cellItem = rowItem.valueCells.find(function (item) {
+                        return item.column === columnName;
+                    });
+                    const currentValue = String(cellItem && cellItem.value != null ? cellItem.value : "");
+                    let nextValue = currentValue;
+
+                    if (config.bulkFillMode === "set") {
+                        nextValue = config.bulkFillValue;
+                    } else if (config.bulkFillMode === "replace") {
+                        nextValue = currentValue.split(config.bulkFillValue).join(config.bulkFillAuxValue);
+                    } else if (config.bulkFillMode === "prefix") {
+                        nextValue = config.bulkFillValue + currentValue;
+                    } else if (config.bulkFillMode === "suffix") {
+                        nextValue = currentValue + config.bulkFillValue;
+                    } else if (config.bulkFillMode === "uppercase") {
+                        nextValue = currentValue.toUpperCase();
+                    } else if (config.bulkFillMode === "lowercase") {
+                        nextValue = currentValue.toLowerCase();
+                    } else if (config.bulkFillMode === "trim") {
+                        nextValue = currentValue.trim();
+                    } else if (config.bulkFillMode === "clear") {
+                        nextValue = "";
+                    } else if (config.bulkFillMode === "fill-empty") {
+                        nextValue = currentValue.trim() === "" ? config.bulkFillValue : currentValue;
+                    } else if (config.bulkFillMode === "snake_case") {
+                        nextValue = toSnakeCase(currentValue);
+                    } else if (config.bulkFillMode === "camelCase") {
+                        nextValue = toCamelCase(currentValue);
+                    } else if (config.bulkFillMode === "remove-spaces") {
+                        nextValue = currentValue.replace(/\s+/g, "");
+                    } else if (config.bulkFillMode === "remove-accents") {
+                        nextValue = currentValue.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                    } else if (config.bulkFillMode === "remove-special") {
+                        nextValue = currentValue.replace(/[^A-Za-z0-9\s]/g, "");
+                    }
+
+                    updateSelectedValue(rowItem.key, columnName, nextValue);
+                    setCellValueMode(rowItem.key, columnName, "custom");
+                    markCellReviewed(rowItem.key, columnName);
+                });
+
+                pushToast("Preenchimento em massa aplicado na coluna.", "success");
+                closeDistinctColumnMenu();
             }
 
             function getValueCellPickerStyle() {
@@ -1123,6 +1334,12 @@
                         closeValueCellPicker();
                     }
                 }
+
+                if (columnMenu.open) {
+                    if (!target.closest(".preview-column-menu-wrap") && !target.closest(".preview-column-menu")) {
+                        closeDistinctColumnMenu();
+                    }
+                }
             }
 
             function isIgnoredColumn(header) {
@@ -1144,6 +1361,7 @@
             function selectListValue(groupKey, columnName, value) {
                 updateSelectedValue(groupKey, columnName, value);
                 setCellValueMode(groupKey, columnName, "list");
+                markCellReviewed(groupKey, columnName);
                 closeValueCellPicker();
             }
 
@@ -1157,12 +1375,49 @@
                     selectedValues[groupKey][columnName] = "";
                 }
 
+                markCellReviewed(groupKey, columnName);
                 closeValueCellPicker();
+                focusCustomCellInput(groupKey, columnName);
+            }
+
+            function focusCustomCellInput(groupKey, columnName) {
+                const modeKey = getCellModeKey(groupKey, columnName);
+
+                nextTick(function () {
+                    const inputs = document.querySelectorAll("[data-distinct-custom-cell]");
+
+                    for (let index = 0; index < inputs.length; index += 1) {
+                        const input = inputs[index];
+
+                        if (input instanceof HTMLInputElement && input.getAttribute("data-distinct-custom-cell") === modeKey) {
+                            input.focus();
+                            input.select();
+                            return;
+                        }
+                    }
+                });
+            }
+
+            function openCustomValueEdit(groupKey, columnName, event) {
+                if (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+
+                closeValueCellPicker();
+
+                if (getCellValueMode(groupKey, columnName) === "custom") {
+                    focusCustomCellInput(groupKey, columnName);
+                    return;
+                }
+
+                startCustomValue(groupKey, columnName);
             }
 
             function updateCustomValue(groupKey, columnName, value) {
                 updateSelectedValue(groupKey, columnName, value);
                 setCellValueMode(groupKey, columnName, "custom");
+                markCellReviewed(groupKey, columnName);
             }
 
             function cyclePreviewSort(header) {
@@ -1393,6 +1648,7 @@
                 ignoredColumnsLabel,
                 isIgnoredColumn,
                 isGroupingColumn,
+                getCellModeKey,
                 getCellValueMode,
                 openValueCellPicker,
                 closeValueCellPicker,
@@ -1400,14 +1656,24 @@
                 valueCellPicker,
                 selectListValue,
                 startCustomValue,
+                openCustomValueEdit,
                 updateCustomValue,
                 updateSelectedValue,
+                getCellChevronClass,
+                getCellChevronTitle,
                 cyclePreviewSort,
                 getPreviewSortIcon,
                 isRowExcluded,
                 toggleRowExcluded,
                 pasteListFromClipboard,
-                dismissToast
+                dismissToast,
+                columnMenu,
+                isValueColumn,
+                getBulkFillConfig,
+                toggleDistinctColumnMenu,
+                closeDistinctColumnMenu,
+                getDistinctColumnMenuStyle,
+                applyDistinctBulkFill
             };
         },
         template: `
@@ -1688,11 +1954,20 @@
                                                             :key="'preview-header-' + headerIndex"
                                                             :class="{ 'compare-column-key': validGroupColumns.indexOf(header) !== -1 }"
                                                         >
-                                                            <div class="preview-header-cell">
+                                                            <div class="preview-header-cell" :class="{ 'preview-column-menu-wrap': isValueColumn(header) }">
                                                                 <div class="input-group input-group-sm preview-column-group">
                                                                     <span class="form-control form-control-sm preview-input preview-header-label" :title="header">{{ header }}</span>
                                                                     <button class="btn btn-outline-secondary" type="button" @click="cyclePreviewSort(header)" title="Ordenar coluna">
                                                                         <i :class="getPreviewSortIcon(header)" aria-hidden="true"></i>
+                                                                    </button>
+                                                                    <button
+                                                                        v-if="isValueColumn(header)"
+                                                                        class="btn btn-outline-secondary"
+                                                                        type="button"
+                                                                        @click.stop="toggleDistinctColumnMenu(header, $event)"
+                                                                        title="Opcoes da coluna"
+                                                                    >
+                                                                        <i class="fas fa-ellipsis-v" aria-hidden="true"></i>
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -1730,17 +2005,24 @@
                                                             v-for="(cellItem, cellIndex) in rowItem.valueCells"
                                                             :key="'value-cell-' + rowIndex + '-' + cellIndex"
                                                         >
-                                                            <div v-if="!cellItem.isCustom" class="distinct-value-cell" @click="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)">
+                                                            <div v-if="!cellItem.isCustom" class="distinct-value-cell" @click="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)" @contextmenu.prevent="openCustomValueEdit(rowItem.key, cellItem.column, $event)">
                                                                 <div class="form-control form-control-sm preview-input distinct-value-display" :title="formatSelectLabel(cellItem.value)">
                                                                     {{ formatSelectLabel(cellItem.value) }}
                                                                 </div>
-                                                                <button class="btn btn-sm btn-outline-secondary distinct-value-picker-btn" type="button" title="Escolher valor" @click.stop="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)">
+                                                                <button
+                                                                    class="btn btn-sm distinct-value-picker-btn"
+                                                                    :class="getCellChevronClass(rowItem.key, cellItem.column, cellItem.options, cellItem.isCustom)"
+                                                                    type="button"
+                                                                    :title="getCellChevronTitle(rowItem.key, cellItem.column, cellItem.options, cellItem.isCustom)"
+                                                                    @click.stop="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)"
+                                                                >
                                                                     <i class="fas fa-chevron-down" aria-hidden="true"></i>
                                                                 </button>
                                                             </div>
-                                                            <div v-else class="distinct-value-cell distinct-value-cell-custom">
+                                                            <div v-else class="distinct-value-cell distinct-value-cell-custom" @contextmenu.prevent="openCustomValueEdit(rowItem.key, cellItem.column, $event)">
                                                                 <input
                                                                     class="form-control form-control-sm preview-input distinct-value-input"
+                                                                    :data-distinct-custom-cell="getCellModeKey(rowItem.key, cellItem.column)"
                                                                     :value="cellItem.value"
                                                                     :title="formatSelectLabel(cellItem.value)"
                                                                     placeholder="Novo valor"
@@ -1748,9 +2030,10 @@
                                                                     @input="updateCustomValue(rowItem.key, cellItem.column, $event.target.value)"
                                                                 >
                                                                 <button
-                                                                    class="btn btn-sm btn-outline-secondary distinct-value-picker-btn"
+                                                                    class="btn btn-sm distinct-value-picker-btn"
+                                                                    :class="getCellChevronClass(rowItem.key, cellItem.column, cellItem.options, cellItem.isCustom)"
                                                                     type="button"
-                                                                    title="Escolher valor da lista"
+                                                                    :title="getCellChevronTitle(rowItem.key, cellItem.column, cellItem.options, cellItem.isCustom)"
                                                                     @click.stop="openValueCellPicker(rowItem.key, cellItem.column, cellItem.options, $event)"
                                                                 >
                                                                     <i class="fas fa-chevron-down" aria-hidden="true"></i>
@@ -1857,6 +2140,55 @@
                             </label>
                             <div v-if="!ignoredColumnChoices.length" class="distinct-multiselect-empty">
                                 Nenhuma coluna encontrada.
+                            </div>
+                        </div>
+                    </div>
+                </teleport>
+
+                <teleport to="body">
+                    <div
+                        v-if="columnMenu.open"
+                        class="preview-column-menu"
+                        :style="getDistinctColumnMenuStyle()"
+                        @click.stop
+                    >
+                        <div class="p-3">
+                            <div class="small fw-semibold mb-2">Preenchimento em massa</div>
+                            <div class="small text-secondary mb-2">Aplica nas linhas visiveis no preview (filtros, pesquisa e ordenacao activos).</div>
+                            <div class="preview-column-menu-group">
+                                <select class="form-select form-select-sm mb-2" v-model="getBulkFillConfig(columnMenu.column).bulkFillMode">
+                                    <option value="set">Definir valor</option>
+                                    <option value="replace">Substituir texto</option>
+                                    <option value="prefix">Prefixo</option>
+                                    <option value="suffix">Sufixo</option>
+                                    <option value="numeric-sequence">Sequencia numerica</option>
+                                    <option value="uppercase">UPPERCASE</option>
+                                    <option value="lowercase">lowercase</option>
+                                    <option value="trim">Trim</option>
+                                    <option value="clear">Limpar</option>
+                                    <option value="fill-empty">Preencher vazios</option>
+                                    <option value="snake_case">snake_case</option>
+                                    <option value="camelCase">camelCase</option>
+                                    <option value="remove-spaces">Remover espacos</option>
+                                    <option value="remove-accents">Remover acentos</option>
+                                    <option value="remove-special">Remover caracteres especiais</option>
+                                </select>
+                                <input
+                                    v-if="['set','replace','prefix','suffix','fill-empty'].includes(getBulkFillConfig(columnMenu.column).bulkFillMode)"
+                                    class="form-control form-control-sm mb-2"
+                                    v-model="getBulkFillConfig(columnMenu.column).bulkFillValue"
+                                    placeholder="Valor"
+                                >
+                                <div v-if="getBulkFillConfig(columnMenu.column).bulkFillMode === 'numeric-sequence'" class="row g-2 mb-2">
+                                    <div class="col-6">
+                                        <input class="form-control form-control-sm" v-model="getBulkFillConfig(columnMenu.column).bulkFillSequenceStart" placeholder="Valor inicial">
+                                    </div>
+                                    <div class="col-6">
+                                        <input class="form-control form-control-sm" v-model="getBulkFillConfig(columnMenu.column).bulkFillSequenceStep" placeholder="Incremento">
+                                    </div>
+                                </div>
+                                <input v-if="getBulkFillConfig(columnMenu.column).bulkFillMode === 'replace'" class="form-control form-control-sm mb-2" v-model="getBulkFillConfig(columnMenu.column).bulkFillAuxValue" placeholder="Substituir por">
+                                <button class="btn btn-sm btn-outline-primary w-100" type="button" @click="applyDistinctBulkFill(columnMenu.column)">Aplicar</button>
                             </div>
                         </div>
                     </div>

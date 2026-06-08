@@ -283,6 +283,24 @@ html {
     color: var(--ec-ink);
 }
 
+.distinct-value-picker-btn-attention {
+    color: #ef4444;
+}
+
+.distinct-value-picker-btn-attention:hover {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.08) !important;
+}
+
+.distinct-value-picker-btn-resolved {
+    color: #22c55e;
+}
+
+.distinct-value-picker-btn-resolved:hover {
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.08) !important;
+}
+
 .distinct-value-picker {
     display: flex;
     flex-direction: column;
